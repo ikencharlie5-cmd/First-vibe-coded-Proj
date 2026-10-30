@@ -540,11 +540,19 @@ function decorateWorld(r) {
 
   // Town life: stalls, barrels, lamps, wells, pens and each town's own touches.
   const extras = {
-    ironhold: ['stall', 'stall', 'stall', 'barrel', 'barrel', 'crates', 'crates', 'hay', 'cart', 'well', 'banner', 'banner', 'barrel', 'flowers', 'flowers'],
-    stonedeep: ['orecart', 'orecart', 'anvilprop', 'crates', 'barrel', 'well', 'banner', 'stall', 'crates'],
-    saltmere: ['nets', 'nets', 'barrel', 'crates', 'stall', 'well', 'banner', 'barrel'],
-    thornwood: ['logpile', 'logpile', 'logpile', 'stall', 'barrel', 'well', 'banner', 'hay'],
-    ratsnest: ['tent', 'tent', 'tent', 'firepit', 'barrel', 'barrel', 'crates', 'banner', 'stall'],
+    ironhold: ['fountain', 'forge', 'tables', 'tables', 'tables', 'board', 'well', 'cart', 'hay', 'barrel', 'barrel', 'crates', 'crates', 'banner', 'banner', 'flowers', 'flowers', 'barrel'],
+    stonedeep: ['forge', 'forge', 'orecart', 'orecart', 'anvilprop', 'tables', 'tables', 'board', 'crates', 'barrel', 'banner'],
+    saltmere: ['fishrack', 'fishrack', 'fishrack', 'nets', 'nets', 'tables', 'tables', 'board', 'barrel', 'crates', 'well', 'banner'],
+    thornwood: ['logpile', 'logpile', 'sawhorse', 'sawhorse', 'tables', 'tables', 'board', 'well', 'hay', 'barrel', 'banner', 'forge'],
+    ratsnest: ['gamble', 'gamble', 'gamble', 'tent', 'tent', 'firepit', 'firepit', 'tables', 'barrel', 'barrel', 'crates', 'banner'],
+  };
+  // What each town's market stalls sell.
+  const STALL_GOODS = {
+    ironhold: ['produce', 'bread', 'cloth', 'pottery', 'meat', 'tools', 'flowers', 'fish', 'produce', 'bread', 'cloth', 'meat'],
+    stonedeep: ['tools', 'ore', 'meat', 'bread', 'tools', 'ore'],
+    saltmere: ['fish', 'fish', 'produce', 'cloth', 'bread', 'fish'],
+    thornwood: ['meat', 'furs', 'produce', 'tools', 'bread', 'furs'],
+    ratsnest: ['shady', 'weapons', 'shady', 'meat', 'weapons'],
   };
   for (const id in TOWN_DEFS) {
     const d = TOWN_DEFS[id], tr = mulberry32(id.length * 31 + d.y);
@@ -559,6 +567,37 @@ function decorateWorld(r) {
       }
       return !(x === d.arrive.x && y === d.arrive.y);
     };
+    // Market stalls ring the square and line the main streets, each facing the street.
+    const face = (x, y) => {
+      if (d.terraces) return 0;
+      if (Math.abs(x - d.x) <= 3 && Math.abs(y - d.y) > 1) return x < d.x ? Math.PI / 2 : -Math.PI / 2;
+      if (Math.abs(y - d.y) <= 3) return y < d.y ? 0 : Math.PI;
+      const dx = d.pc.x - x, dy = d.pc.y - y;
+      return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? Math.PI / 2 : -Math.PI / 2) : (dy > 0 ? 0 : Math.PI);
+    };
+    const spots = [];
+    const pr = id === 'ironhold' ? [5, 4] : [4, 3];
+    for (let y = d.pc.y - pr[1]; y <= d.pc.y + pr[1]; y++) for (let x = d.pc.x - pr[0]; x <= d.pc.x + pr[0]; x++) spots.push([x, y, 0.85]);
+    for (let k = -d.hw + 2; k <= d.hw - 2; k += 2) for (const side of [-2, 2]) spots.push([d.x + k, d.y + side, 0.5]);
+    for (let k = -d.hh + 2; k <= d.hh - 2; k += 2) for (const side of [-2, 2]) spots.push([d.x + side, d.y + k, 0.5]);
+    // Stalls may back onto houses, but keep a gap from each other and from the market and carriage.
+    const okStall = (x, y) => {
+      if (Math.abs(x - d.x) > d.hw - 1 || Math.abs(y - d.y) > d.hh - 1) return false;
+      if (!d.terraces && (Math.abs(x - d.x) <= 1 || Math.abs(y - d.y) <= 1)) return false;
+      const i = idx(x, y);
+      if (terrain[i] !== T.FLOOR || townBlocks.has(i) || (x === d.arrive.x && y === d.arrive.y)) return false;
+      for (let yy = y - 1; yy <= y + 1; yy++) for (let xx = x - 1; xx <= x + 1; xx++) if (services.has(idx(xx, yy)) || stallTiles.has(idx(xx, yy))) return false;
+      return true;
+    };
+    const stallTiles = new Set();
+    let gi = 0;
+    for (const [x, y, p] of spots) {
+      if (tr() > p || !okStall(x, y)) continue;
+      stallTiles.add(idx(x, y));
+      const goods = STALL_GOODS[id][gi++ % STALL_GOODS[id].length];
+      townProps.push({ kind: 'stall', goods, x, y, rot: face(x, y), town: id });
+      block(x, y);
+    }
     for (const kind of extras[id]) {
       for (let tries = 0; tries < 60; tries++) {
         const x = d.x + Math.round((tr() * 2 - 1) * (d.hw - 1)), y = d.y + Math.round((tr() * 2 - 1) * (d.hh - 1));
@@ -614,7 +653,7 @@ function layTown(id, d) {
   const inRect = (x, y, m = 0) => Math.abs(x - d.x) <= d.hw - m && Math.abs(y - d.y) <= d.hh - m;
   services.set(idx(d.pc.x - (d.terraces ? 4 : 3), d.pc.y - (d.terraces ? 1 : 3)), { type: 'market', town: id });
   services.set(idx(d.pc.x + (d.terraces ? 4 : 3), d.pc.y - (d.terraces ? 1 : 3)), { type: 'carriage', town: id });
-  const street = (x, y) => d.terraces ? Math.abs(x - d.x) <= 2 : Math.abs(x - d.x) <= 1 || Math.abs(y - d.y) <= 1;
+  const street = (x, y) => d.terraces ? Math.abs(x - d.x) <= 2 : Math.abs(x - d.x) <= 2 || Math.abs(y - d.y) <= 2;
   const big = id === 'ironhold';
   const plaza = (x, y) => Math.abs(x - d.pc.x) <= (big ? 5 : 4) && Math.abs(y - d.pc.y) <= (big ? 4 : 2);
   const reserved = new Set();

@@ -709,11 +709,20 @@ const Render3D = (() => {
     },
     ratsnest: (g, r) => {
       const w = 2.3, d = 2.1, browns = [0x5a4632, 0x4a3a2a, 0x6a523a, 0x3e3022];
-      for (let k = 0; k < 6; k++) { const h = 1.55 + ((k * 37 + Math.floor(r * 10)) % 5) * 0.08; g.add(box(w / 6 + 0.02, h, 0.1, browns[k % 4], -w / 2 + w / 12 + k * w / 6, h / 2, d / 2)); }
-      g.add(box(w, 1.5, d - 0.1, 0x3e3022, 0, 0.75, -0.05));
+      // A lean-to: tall front wall, low back wall, one sloping roof resting on both.
+      const back = 1.55, front = 2.05, slope = Math.atan2(front - back, d);
+      for (let k = 0; k < 6; k++) { const h = front + ((k * 37 + Math.floor(r * 10)) % 3) * 0.04; g.add(box(w / 6 + 0.02, h, 0.1, browns[k % 4], -w / 2 + w / 12 + k * w / 6, h / 2, d / 2)); }
+      g.add(box(w, back, d - 0.1, 0x3e3022, 0, back / 2, -0.05));
+      const sh = new C.Shape();
+      sh.moveTo(-d / 2, 0); sh.lineTo(d / 2, 0); sh.lineTo(d / 2, front - back); sh.lineTo(-d / 2, 0);
+      const wedge = new C.ExtrudeGeometry(sh, { depth: w, bevelEnabled: false });
+      wedge.translate(0, 0, -w / 2); wedge.rotateY(-Math.PI / 2);
+      g.add(mesh(wedge, mat(0x3e3022), 0, back, 0));
       const dr = box(0.6, 1.05, 0.06, 0x2a2016, 0.3, 0.55, d / 2 + 0.07); dr.rotation.z = 0.05; g.add(dr);
-      const rf = box(w + 0.6, 0.1, d + 0.7, 0x4a4036, 0, 1.85, 0.1); rf.rotation.x = -0.18; g.add(rf);
-      g.add(box(0.9, 0.12, 0.8, choose([0x8a3a2a, 0x3a6a4a, 0x4a5a8a, 0x8a7a3a], r), -0.4, 1.95, 0.3));
+      const len = Math.hypot(d, front - back) + 0.6;
+      const rf = box(w + 0.5, 0.1, len, 0x4a4036, 0, (front + back) / 2 + 0.07, 0); rf.rotation.x = -slope; g.add(rf);
+      const patch = box(0.9, 0.06, 0.8, choose([0x8a3a2a, 0x3a6a4a, 0x4a5a8a, 0x8a7a3a], r), -0.4, (front + back) / 2 + 0.07 + Math.tan(slope) * 0.3 + 0.07, 0.3);
+      patch.rotation.x = -slope; g.add(patch);
       g.add(box(0.5, 0.45, 0.5, 0x7a5a3a, w / 2 + 0.4, 0.23, d / 2 - 0.2), cyl(0.24, 0.24, 0.55, 0x5a3a20, -w / 2 - 0.35, 0.28, d / 2 - 0.3, 7));
       g.add(cyl(0.02, 0.02, 0.3, 0x1a1a1a, -0.7, 1.55, d / 2 + 0.25, 4), mesh(geo('BoxGeometry', 0.14, 0.18, 0.14), windowMat, -0.7, 1.35, d / 2 + 0.25, false));
       const gl = glowSprite(0xffb050, 1.6); gl.position.set(-0.7, 1.35, d / 2 + 0.3); g.add(gl);
@@ -786,7 +795,7 @@ const Render3D = (() => {
     den: (g, w, d) => {
       g.add(box(w - 0.4, 2.4, d - 0.4, 0x3e3022, 0, 1.2, 0));
       for (let k = 0; k < 10; k++) g.add(box((w - 0.4) / 10 + 0.02, 2.3 + (k % 3) * 0.12, 0.1, [0x4a3a2a, 0x3a2e20, 0x5a4632][k % 3], -w / 2 + 0.2 + (k + 0.5) * (w - 0.4) / 10, 1.2, d / 2 - 0.15));
-      const rf = new C.Group(); roof(rf, w - 0.2, d - 0.2, 1.1, 0, 0x2e2822, null, { over: 0.3 }); rf.rotation.y = Math.PI / 2; rf.position.y = 2.4; rf.rotation.z = 0.04; g.add(rf);
+      const rf = new C.Group(); roof(rf, d - 0.2, w - 0.2, 1.1, 0, 0x2e2822, 0x3e3022, { over: 0.3 }); rf.rotation.y = Math.PI / 2; rf.position.y = 2.4; g.add(rf);
       g.add(box(1.2, 1.5, 0.1, 0x1a1410, 0, 0.75, d / 2 - 0.08));
       const aw = box(w - 0.6, 0.08, 1.2, 0x5a2a2a, 0, 2.0, d / 2 + 0.35); aw.rotation.x = 0.3; g.add(aw);
       for (const x of [-w / 2 + 0.5, -0.9, 0.9, w / 2 - 0.5]) { g.add(mesh(geo('BoxGeometry', 0.16, 0.2, 0.16), windowMat, x, 1.75, d / 2 + 0.1, false)); const gl = glowSprite(0xff9a50, 1.8); gl.position.set(x, 1.75, d / 2 + 0.15); g.add(gl); }
@@ -924,12 +933,72 @@ const Render3D = (() => {
   // ------------------------------------------------------------ town life: props, people, animals
   const TOWN_COLORS = { ironhold: 0xb0302a, stonedeep: 0x4a5a8a, saltmere: 0x2a7aa0, thornwood: 0x3a7a2a, ratsnest: 0x2a2a2a };
   const PROP_MODELS = {
-    stall: (g, town) => {
-      for (const [x, z] of [[-0.4, -0.35], [0.4, -0.35], [-0.4, 0.35], [0.4, 0.35]]) g.add(cyl(0.035, 0.035, 1.1, 0x6b4a2b, x, 0.55, z, 5));
-      g.add(box(0.9, 0.35, 0.45, 0x7a5232, 0, 0.18, 0.1));
-      const c = [0xe8c547, 0x3a8a3a, 0x2a6aa0, 0xa03a6a][Math.floor(Math.random() * 4)];
-      for (let k = 0; k < 3; k++) g.add(box(0.3, 0.05, 0.9, k % 2 ? 0xf2ead8 : c, -0.3 + k * 0.3, 1.12, 0));
-      g.add(box(0.18, 0.12, 0.18, 0xd04a2a, -0.2, 0.42, 0.1), box(0.18, 0.12, 0.18, 0x6aa03a, 0.05, 0.42, 0.1), cyl(0.08, 0.08, 0.1, 0xe8c547, 0.28, 0.41, 0.1, 6));
+    stall: (g, town, p) => {
+      const goods = (p && p.goods) || 'produce';
+      const awn = { produce: 0x3a8a3a, bread: 0xc8a050, cloth: 0x7a3a9a, pottery: 0xb0583a, meat: 0xa02a2a, tools: 0x3a5a7a, flowers: 0xd05a8a,
+        fish: 0x2a6aa0, ore: 0x4a4a52, furs: 0x6a4a2a, shady: 0x2a1a1a, weapons: 0x5a5a62 }[goods];
+      for (const [x, z] of [[-0.5, -0.38], [0.5, -0.38], [-0.5, 0.32], [0.5, 0.32]]) g.add(cyl(0.035, 0.035, 1.55, 0x6b4a2b, x, 0.78, z, 5));
+      g.add(box(1.1, 0.55, 0.5, 0x7a5232, 0, 0.28, 0.12), box(1.14, 0.06, 0.56, 0x8a6338, 0, 0.58, 0.12));
+      g.add(box(1.0, 0.06, 0.25, 0x8a6338, 0, 0.95, -0.3), box(1.0, 0.06, 0.25, 0x8a6338, 0, 1.25, -0.3));
+      for (let k = 0; k < 4; k++) { const a = box(0.28, 0.05, 1.05, k % 2 ? 0xf2ead8 : awn, -0.42 + k * 0.28, 1.62, 0.05); a.rotation.x = 0.22; g.add(a); }
+      for (let k = 0; k < 4; k++) g.add(box(0.28, 0.14, 0.03, k % 2 ? 0xf2ead8 : awn, -0.42 + k * 0.28, 1.48, 0.58));
+      const top = 0.62, add = (o) => g.add(o);
+      const R = k => (Math.sin(k * 91.7 + goods.length * 13) + 1) / 2;
+      if (goods === 'produce') for (let k = 0; k < 9; k++) add(mesh(geo('IcosahedronGeometry', 0.07, 0), mat([0xd03a2a, 0x6aa83a, 0xf0a030][k % 3]), -0.4 + (k % 5) * 0.2, top + 0.06, 0.02 + Math.floor(k / 5) * 0.16));
+      if (goods === 'bread') for (let k = 0; k < 6; k++) { const l = cyl(0.06, 0.07, 0.24, 0xc08a48, -0.38 + (k % 3) * 0.38, top + 0.07, 0.03 + Math.floor(k / 3) * 0.17, 6); l.rotation.z = Math.PI / 2; add(l); }
+      if (goods === 'cloth') for (let k = 0; k < 5; k++) { const c = cyl(0.07, 0.07, 0.4, [0x7a3a9a, 0x2a6aa0, 0xc8a050, 0xa02a2a, 0x3a8a3a][k], -0.4 + k * 0.2, top + 0.08, 0.12, 8); c.rotation.x = Math.PI / 2; add(c); }
+      if (goods === 'pottery') for (let k = 0; k < 6; k++) add(cyl(0.05, 0.08, 0.18 + R(k) * 0.12, 0xb0583a, -0.4 + k * 0.16, top + 0.1, 0.1, 7));
+      if (goods === 'meat') { for (let k = 0; k < 4; k++) add(cone(0.08, 0.25, 0x9a3a2a, -0.36 + k * 0.24, 1.35, 0.28, 6)); add(box(0.6, 0.06, 0.3, 0xc04a3a, 0, top + 0.03, 0.12)); }
+      if (goods === 'tools' || goods === 'weapons') for (let k = 0; k < 5; k++) { const t = box(0.04, 0.42, 0.04, goods === 'weapons' ? 0xc8ccd2 : 0x6b4a2b, -0.4 + k * 0.2, top + 0.2, 0.25); t.rotation.z = 0.25; add(t); add(box(0.14, 0.08, 0.05, 0x9aa0a8, -0.4 + k * 0.2 + 0.05, top + 0.38, 0.25)); }
+      if (goods === 'flowers') for (let k = 0; k < 4; k++) { add(cyl(0.09, 0.08, 0.16, 0x5a5a62, -0.36 + k * 0.24, top + 0.08, 0.12, 7)); for (let j = 0; j < 3; j++) add(mesh(geo('IcosahedronGeometry', 0.05, 0), mat([0xe04a6a, 0xf0d040, 0xffffff, 0xa060e0][(k + j) % 4]), -0.36 + k * 0.24 + (j - 1) * 0.05, top + 0.22, 0.12)); }
+      if (goods === 'fish') { add(box(0.95, 0.06, 0.4, 0xe8f0f4, 0, top + 0.03, 0.12)); for (let k = 0; k < 6; k++) add(box(0.22, 0.05, 0.08, 0x8ab0c0, -0.36 + (k % 3) * 0.36, top + 0.08, 0.04 + Math.floor(k / 3) * 0.16)); }
+      if (goods === 'ore') for (let k = 0; k < 6; k++) add(k % 2 ? box(0.18, 0.07, 0.09, [0xc77a3a, 0xa5a5a8][k % 4 > 1 ? 1 : 0], -0.4 + k * 0.16, top + 0.05, 0.12) : mesh(geo('DodecahedronGeometry', 0.08, 0), mat(0x6e6862), -0.4 + k * 0.16, top + 0.07, 0.12));
+      if (goods === 'furs') for (let k = 0; k < 3; k++) { const f = box(0.3, 0.04, 0.45, [0x8f8f96, 0x6a4a2a, 0xd8d0c0][k], -0.33 + k * 0.33, top + 0.03, 0.12); f.rotation.y = R(k) - 0.5; add(f); }
+      if (goods === 'shady') for (let k = 0; k < 7; k++) add(cyl(0.035, 0.045, 0.2, [0x2a5a2a, 0x5a2a2a, 0x2a2a5a][k % 3], -0.42 + k * 0.14, top + 0.1, 0.12, 6));
+      g.add(box(0.6, 0.22, 0.04, 0xb08850, 0, 1.85, 0.58));
+    },
+    fountain: g => {
+      g.add(cyl(0.85, 0.9, 0.4, 0x9a958c, 0, 0.2, 0, 8), mesh(geo('CylinderGeometry', 0.75, 0.75, 0.05, 8), mat(0x4a8ac0), 0, 0.36, 0));
+      g.add(cyl(0.12, 0.16, 1.1, 0x9a958c, 0, 0.75, 0, 6), cyl(0.38, 0.12, 0.15, 0x9a958c, 0, 1.3, 0, 8), mesh(geo('CylinderGeometry', 0.32, 0.32, 0.04, 8), mat(0x4a8ac0), 0, 1.37, 0));
+      g.add(cone(0.08, 0.3, 0xb0aaa0, 0, 1.55, 0, 6));
+    },
+    forge: g => {
+      g.add(box(0.8, 0.7, 0.6, 0x6a645e, -0.2, 0.35, -0.2), mesh(geo('BoxGeometry', 0.5, 0.06, 0.4), glow(0xff6a1a), -0.2, 0.72, -0.2, false));
+      g.add(box(0.3, 1.4, 0.3, 0x5a554e, -0.4, 1.4, -0.35));
+      g.add(cyl(0.18, 0.2, 0.3, 0x6b4a2b, 0.4, 0.15, 0.25, 7), box(0.35, 0.1, 0.15, 0x45454c, 0.4, 0.35, 0.25));
+      g.add(cyl(0.18, 0.18, 0.4, 0x5a3a20, 0.45, 0.2, -0.3, 7));
+      for (let k = 0; k < 3; k++) { const sw = box(0.03, 0.55, 0.03, 0xc8ccd2, 0.15 + k * 0.12, 0.35, -0.48); sw.rotation.z = 0.1; g.add(sw); }
+      const gl = glowSprite(0xff6a1a, 1.6, false); gl.position.set(-0.2, 0.85, -0.2); g.add(gl);
+      flame(g, -0.2, 0.82, -0.2, 0.6);
+    },
+    tables: g => {
+      g.add(box(1.1, 0.07, 0.55, 0x8a6338, 0, 0.55, 0));
+      for (const [x, z] of [[-0.45, -0.2], [0.45, -0.2], [-0.45, 0.2], [0.45, 0.2]]) g.add(box(0.06, 0.52, 0.06, 0x6b4a2b, x, 0.26, z));
+      for (const z of [-0.48, 0.48]) { g.add(box(1.1, 0.06, 0.22, 0x7a5232, 0, 0.32, z)); for (const x of [-0.45, 0.45]) g.add(box(0.06, 0.3, 0.06, 0x6b4a2b, x, 0.15, z)); }
+      for (const [x, z] of [[-0.3, -0.1], [0.1, 0.12], [0.35, -0.08]]) g.add(cyl(0.05, 0.05, 0.12, 0x9a7a4a, x, 0.64, z, 6));
+      g.add(cyl(0.12, 0.12, 0.02, 0xe8e0d0, -0.05, 0.6, -0.05, 8));
+    },
+    board: g => {
+      for (const x of [-0.5, 0.5]) g.add(box(0.08, 1.7, 0.08, 0x5a3a20, x, 0.85, 0));
+      g.add(box(1.0, 0.8, 0.06, 0x8a6338, 0, 1.2, 0.02));
+      for (const [x, y] of [[-0.3, 1.35], [0.05, 1.3], [0.3, 1.1], [-0.15, 1.0]]) g.add(box(0.22, 0.28, 0.02, 0xf2ead8, x, y, 0.06));
+      const rf = box(1.25, 0.06, 0.35, 0x5a3a20, 0, 1.75, 0); rf.rotation.x = 0.3; g.add(rf);
+    },
+    fishrack: g => {
+      for (const x of [-0.55, 0.55]) for (const s of [-1, 1]) { const leg = box(0.05, 1.4, 0.05, 0x7a5432, x, 0.68, s * 0.18); leg.rotation.x = s * 0.25; g.add(leg); }
+      g.add(box(1.2, 0.05, 0.05, 0x7a5432, 0, 1.33, 0));
+      for (let k = 0; k < 6; k++) g.add(box(0.06, 0.28, 0.12, 0xa8b8c0, -0.45 + k * 0.18, 1.12, 0));
+    },
+    sawhorse: g => {
+      for (const x of [-0.45, 0.45]) for (const s of [-1, 1]) { const leg = box(0.06, 0.65, 0.06, 0x7a5432, x, 0.3, 0); leg.rotation.x = s * 0.45; g.add(leg); }
+      const log = cyl(0.15, 0.15, 1.2, 0x8a6338, 0, 0.62, 0, 7); log.rotation.z = Math.PI / 2; g.add(log);
+      g.add(box(0.02, 0.3, 0.5, 0xc8ccd2, 0.15, 0.85, 0), cyl(0.2, 0.22, 0.3, 0x7a5a3a, 0.8, 0.15, 0.4, 7));
+    },
+    gamble: g => {
+      g.add(cyl(0.3, 0.3, 0.6, 0x5a3a20, 0, 0.3, 0, 8), cyl(0.38, 0.38, 0.05, 0x3a2a1a, 0, 0.62, 0, 8));
+      for (const [x, z] of [[0.05, 0.05], [-0.08, 0.1]]) g.add(box(0.06, 0.06, 0.06, 0xf2f2f2, x, 0.68, z));
+      for (let k = 0; k < 3; k++) { const a = k / 3 * Math.PI * 2; g.add(cyl(0.16, 0.16, 0.38, 0x6b4a2b, Math.cos(a) * 0.6, 0.19, Math.sin(a) * 0.6, 6)); }
+      g.add(cyl(0.05, 0.05, 0.12, 0x9a7a4a, 0.15, 0.7, -0.1, 6));
     },
     barrel: g => { g.add(cyl(0.26, 0.26, 0.6, 0x7a5232, 0, 0.3, 0, 8), cyl(0.27, 0.27, 0.05, 0x3a3a3a, 0, 0.12, 0, 8), cyl(0.27, 0.27, 0.05, 0x3a3a3a, 0, 0.48, 0, 8)); },
     crates: g => { g.add(box(0.45, 0.45, 0.45, 0xa07a40, -0.12, 0.23, 0), box(0.35, 0.35, 0.35, 0xb08850, 0.22, 0.18, 0.15), box(0.3, 0.3, 0.3, 0x9a7444, -0.05, 0.6, 0.02)); },
@@ -1051,6 +1120,7 @@ const Render3D = (() => {
       const d = TOWN_DEFS[id], tg = new C.Group();
       townGroups.push({ g: tg, x: d.x, y: d.y, id });
       scene.add(tg);
+      const staticG = new C.Group();
       for (const p of townProps.filter(p => p.town === id)) {
         if (p.kind === 'pen') {
           const pg = new C.Group();
@@ -1059,7 +1129,7 @@ const Render3D = (() => {
             pg.add(box(0.1, 0.7, 0.1, 0x7a5232, x, tileH[idx(x, y)] + 0.35, y));
             pg.add(box(x === p.x || x === p.x + p.w - 1 ? 0.06 : 1, 0.06, x === p.x || x === p.x + p.w - 1 ? 1 : 0.06, 0x9a7444, x, tileH[idx(x, y)] + 0.5, y));
           }
-          tg.add(pg);
+          staticG.add(pg);
           const n = p.animal === 'chicken' ? 5 : 3;
           for (let k = 0; k < n; k++) {
             const a = animal(p.animal);
@@ -1072,14 +1142,24 @@ const Render3D = (() => {
           continue;
         }
         const g = new C.Group();
-        PROP_MODELS[p.kind](g, id);
+        PROP_MODELS[p.kind](g, id, p);
         const h = p.kind === 'boat' ? 0 : tileH[idx(p.x, p.y)];
         g.position.set(p.x, h, p.y);
         g.rotation.y = p.rot || 0;
-        if (p.kind === 'boat') g.userData.bob = Math.random() * 6;
-        tg.add(g);
-        if (p.kind === 'boat') walkers.push({ boat: g });
+        if (p.kind === 'boat') { g.userData.bob = Math.random() * 6; tg.add(g); walkers.push({ boat: g }); continue; }
+        staticG.add(g);
+        // A merchant minds every stall; smiths hammer away at the forges.
+        if (p.kind === 'stall' || p.kind === 'forge') {
+          const a = townsfolk(folkColors[(p.x * 7 + p.y) % folkColors.length]);
+          const back = p.kind === 'stall' ? -0.75 : 0.75;
+          a.g.position.set(p.x + Math.sin(p.rot || 0) * back, h, p.y + Math.cos(p.rot || 0) * back);
+          a.g.rotation.y = (p.rot || 0) + (p.kind === 'forge' ? Math.PI * 0.75 : 0);
+          if (p.kind === 'forge') { a.hand.add(tool('hammer', 0)); a.working = true; a.phase = p.x; }
+          tg.add(a.g);
+          actors.push(a);
+        }
       }
+      tg.add(bake(staticG));
       // Townsfolk wander between open spots; some carry crates.
       const count = Math.round((id === 'ironhold' ? 12 : 7) * Q.folk);
       for (let k = 0; k < count; k++) {
@@ -2049,7 +2129,10 @@ const Render3D = (() => {
     for (const o of structObjs.values()) for (const a of o.crew) {
       if (a.working) a.armR.rotation.x = -1.2 + Math.sin(t * 5 + a.phase * 2) * 0.8;
     }
-    for (const a of actors) a.armL.rotation.x = Math.sin(t * 1.3 + a.g.position.x) * 0.15;
+    for (const a of actors) {
+      a.armL.rotation.x = Math.sin(t * 1.3 + a.g.position.x) * 0.15;
+      if (a.working) a.armR.rotation.x = -1.2 + Math.sin(t * 6 + a.phase) * 0.8;
+    }
     // Town life only runs near the player.
     for (const tg of townGroups) tg.g.visible = Math.hypot(tg.x - player.vx, tg.y - player.vz) < 75;
     for (const w of walkers) {
