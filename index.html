@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ironhold</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>IRONHOLD <span class="dim">an ASCII refinement empire</span></h1>
+    <div class="hdr-btns">
+      <button id="btn-empire">Empire (E)</button>
+      <button id="btn-help">Help (?)</button>
+      <button id="btn-save">Save</button>
+      <button id="btn-reset" class="danger">Reset</button>
+    </div>
+  </header>
+  <main>
+    <section id="left">
+      <pre id="map" aria-label="Game map"></pre>
+      <div id="status"></div>
+      <div id="log"></div>
+      <div id="dpad">
+        <button data-dir="0,-1" class="up">&#9650;</button>
+        <button data-dir="-1,0" class="left">&#9664;</button>
+        <button id="btn-eat" class="mid">Eat</button>
+        <button data-dir="1,0" class="right">&#9654;</button>
+        <button data-dir="0,1" class="down">&#9660;</button>
+      </div>
+    </section>
+    <aside id="side">
+      <div class="stat">Gold: <b id="gold" class="gold">0</b></div>
+      <div id="hpbar"></div>
+      <div id="combat" class="small"></div>
+      <div id="target"></div>
+      <div id="threat" class="small"></div>
+      <div id="wages" class="small dim"></div>
+      <div class="tabs">
+        <button class="tab" data-tab="skills">Skills</button>
+        <button class="tab" data-tab="inv">Pack</button>
+        <button class="tab" data-tab="gear">Gear</button>
+      </div>
+      <div id="tabbody"></div>
+    </aside>
+  </main>
+  <div id="modal" class="hidden">
+    <div id="modal-box">
+      <button id="modal-close" aria-label="Close">x</button>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+  <script src="js/data.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
