@@ -57,6 +57,8 @@ function newState() {
     discovered: { ironhold: true },
     stats: { kills: 0, earned: 0 },
     savedAt: Date.now(), seenHelp: false,
+    story: { step: 0, winter: 0, side: 0, choice: null, forgeLit: false, journal: [] },
+    sailing: false,
   };
 }
 
@@ -81,6 +83,7 @@ function load() {
     state = Object.assign(newState(), s);
     state.xp = Object.assign(newState().xp, s.xp || {});
     state.equip = Object.assign(newState().equip, s.equip || {});
+    state.story = Object.assign(newState().story, s.story || {});
     return true;
   } catch (e) {
     return false;
@@ -479,8 +482,11 @@ function depositAll() {
 // ---------------------------------------------------------------- movement & collision
 const nodeActive = (n, now) => !!n && n.until <= now;
 const SOLID_RES = new Set(['pine', 'oak', 'ironwood', 'copper', 'iron', 'coal', 'starrock']);
+// Afloat you can only go where the water is open; on foot, frozen lakes count as ground.
+const sailable = (x, y) => x >= 0 && y >= 0 && x < W && y < H && (terrain[idx(x, y)] === T.WATER || terrain[idx(x, y)] === T.BRIDGE) && !iceAt(x, y);
 function solidTile(x, y, now) {
-  if (!walkableTerrain(x, y)) return true;
+  if (state.sailing) return !sailable(x, y) || structIndex.has(idx(x, y));
+  if (!walkableTerrain(x, y) && !iceAt(x, y)) return true;
   const i = idx(x, y), n = nodes.get(i);
   if (n && SOLID_RES.has(n.res) && n.until <= now) return true;
   return services.has(i) || townBlocks.has(i) || structIndex.has(i);
@@ -506,7 +512,7 @@ function movePlayer(dt, now) {
   let dy = -Math.cos(yaw) * f - Math.sin(yaw) * r;
   const len = Math.hypot(dx, dy);
   dx /= len; dy /= len;
-  const step = dt * (keys.has('shift') ? 6.5 : 4);
+  const step = dt * (state.sailing ? (keys.has('shift') ? 9 : 7) : keys.has('shift') ? 6.5 : 4);
   if (!collides(state.px + dx * step, state.py, now)) state.px += dx * step;
   if (!collides(state.px, state.py + dy * step, now)) state.py += dy * step;
   state.face = Math.atan2(dx, dy);
@@ -529,8 +535,12 @@ function describeTarget(t) {
     if (t.svc.type === 'carriage') return 'Hire a carriage';
     if (t.svc.type === 'chest') return state.opened[t.svc.poi] ? 'Search the empty chest' : t.svc.poi.endsWith('_hoard') ? 'Open the hoard' : 'Open the old chest';
     if (t.svc.type === 'portal') return t.svc.label;
+    if (t.svc.type === 'npc') return Story.npcHere(t.svc.npc) ? `Talk to ${NPC_NAMES[t.svc.npc]}` : 'Look at the empty throne';
+    if (t.svc.type === 'forge') return state.story.forgeLit ? 'Look at the Firstforge' : 'Use the Firstforge';
     return 'Pray at the shrine';
   }
+  if (t.kind === 'sail') return 'Launch your sailboat';
+  if (t.kind === 'land') return 'Go ashore';
   if (t.kind === 'struct') {
     const def = structDef(t.s);
     if (t.s.pending) return `${t.s.level ? 'Upgrade' : 'Build'} ${def.name} (${buildPct(t.s)}%)`;
@@ -560,6 +570,15 @@ function findInteract(now) {
     const s = structIndex.get(i);
     if (s) consider(x, y, { kind: 'struct', s, x, y }, REACH);
   }
+  // Launching or beaching the boat uses the tile straight ahead; whatever is nearest wins.
+  const ax = Math.round(px + fx * 1.1), ay = Math.round(py + fy * 1.1);
+  if (!state.sailing && have('sailboat') && sailable(ax, ay) && terrain[idx(ax, ay)] === T.WATER) consider(ax, ay, { kind: 'sail', x: ax, y: ay }, REACH);
+  else if (state.sailing && (walkableTerrain(ax, ay) || iceAt(ax, ay))) {
+    state.sailing = false;
+    const clear = !collides(ax, ay, now);
+    state.sailing = true;
+    if (clear) consider(ax, ay, { kind: 'land', x: ax, y: ay }, REACH);
+  }
   return best;
 }
 
@@ -567,8 +586,17 @@ function interact(t) {
   if (!t) return;
   if (t.kind === 'monster') startCombat(t.m);
   else if (t.kind === 'node') startGather(t.i);
+  else if (t.kind === 'sail' || t.kind === 'land') {
+    state.sailing = t.kind === 'sail';
+    state.px = t.x; state.py = t.y;
+    action = null;
+    Sound.sfx('splash');
+    log(state.sailing ? 'You push off and raise the sail.' : 'You drag the boat up the shore.', 'dim');
+  }
   else if (t.kind === 'service') {
     if (t.svc.type === 'chest') openChest(t.svc.poi);
+    else if (t.svc.type === 'npc') openPanel('talk', { npc: t.svc.npc });
+    else if (t.svc.type === 'forge') Story.useForge();
     else if (t.svc.type === 'portal') {
       state.px = t.svc.to.x; state.py = t.svc.to.y;
       action = null;
@@ -703,6 +731,8 @@ function spawnMonster(far) {
     const table = spawnTable(x, y);
     if (!table || monsterBlocked(x, y, Date.now())) continue;
     const type = pickWeighted(Math.random, table);
+    // With the Bandit King gone, his gangs thin out.
+    if (type === 'bandit' && state.story.choice === 'slain' && Math.random() < 0.6) continue;
     monsters.push({ id: nextMonsterId++, type, x, y, hx: x, hy: y, hp: MONSTERS[type].hp, aggro: false, nextMove: 0, nextAtk: 0 });
     return;
   }
@@ -717,7 +747,7 @@ function stepToward(m, tx, ty, now) {
 }
 
 function updateMonsters(now) {
-  const cl = combatLevel(), safe = inAnyTown();
+  const cl = combatLevel(), safe = inAnyTown() || state.sailing;
   for (const m of monsters) {
     if (m.hp <= 0) continue;
     if (Math.abs(m.x - state.px) > 50 || Math.abs(m.y - state.py) > 50) continue;
@@ -757,7 +787,7 @@ function hitChance(atkRoll, defRoll) {
 }
 
 function startCombat(m) {
-  if (inAnyTown()) return;
+  if (inAnyTown() || state.sailing) return;
   action = { type: 'combat', id: m.id, next: Date.now() + 300 };
   m.aggro = true;
 }
@@ -774,7 +804,12 @@ function processCombat(now) {
   const strL = lvl('strength') + (state.style === 'strength' ? 3 : 0);
   const hit = Math.random() < hitChance((atkL + 8) * (64 + eq.acc), (def.def + 8) * 64);
   const maxHit = Math.max(1, Math.floor(0.5 + (strL + 8) * (64 + eq.str) / 640));
-  const dmg = hit ? randInt(1, maxHit) : 0;
+  let dmg = hit ? randInt(1, maxHit) : 0;
+  // Only Frostbane bites through the Frost Wurm's frozen hide.
+  if (m.type === 'wurm' && dmg > 1 && state.equip.weapon !== 'frostbane') {
+    dmg = 1;
+    if (!action.warned) { action.warned = true; log('Your blade skitters off the Wurm\'s frozen hide! Only a Firstsmith blade could cut it.', 'warn'); }
+  }
   m.aggro = true;
   FX.damage(m.x, m.y, dmg);
   Sound.sfx(dmg ? 'hit' : 'miss');
@@ -815,6 +850,7 @@ function killMonster(m) {
   if (def.threat) state.threat = Math.max(0, state.threat + def.threat);
   if (def.boss) { state.bossBack[m.type] = Date.now() + 5 * 60 * 1000; toast(`The ${def.name} falls!`, 'level'); }
   Sound.sfx('defeat');
+  Story.onKill(m.type);
   log(`You defeat the ${def.name.toLowerCase()}${loot.length ? '. Loot: ' + loot.join(', ') : '.'}`, 'good');
   action = null;
 }
@@ -835,6 +871,7 @@ function die(killer) {
   state.hp = maxHp();
   const p = respawnPoint();
   state.px = p.x; state.py = p.y;
+  state.sailing = false;
   action = null;
   for (const m of monsters) m.aggro = false;
   Sound.sfx('death');
@@ -845,6 +882,7 @@ function die(killer) {
 const CHEST_LOOT = [['pine_plank', 6], ['copper_bar', 4], ['iron_bar', 2], ['trout', 3], ['rough_gem', 1], ['wolf_pelt', 1], ['oak_plank', 3]];
 const HOARD_LOOT = [['steel_bar', 4], ['gold_bar', 2], ['rough_gem', 2], ['ancient_coin', 2], ['frostwood_plank', 4], ['star_fragment', 1]];
 function openChest(poi) {
+  if (Story.onChest(poi)) { state.opened[poi] = true; return; }
   if (state.opened[poi]) { log('The chest is empty. Someone got here first... you.', 'dim'); return; }
   state.opened[poi] = true;
   // Dungeon hoards are much richer than chests out in the open.
@@ -891,6 +929,11 @@ function ensureBosses(now) {
   for (const b of spots) {
     if (now < (state.bossBack[b.type] || 0) || monsters.some(m => m.type === b.type) || monsterBlocked(b.x, b.y, now)) continue;
     monsters.push({ id: nextMonsterId++, type: b.type, x: b.x, y: b.y, hx: b.x, hy: b.y, hp: MONSTERS[b.type].hp, aggro: false, nextMove: 0, nextAtk: 0 });
+  }
+  // The Bandit King waits at the Red Stones once you refuse him.
+  const rs = pois.find(p => p.id === 'redstones');
+  if (state.story.side === 2 && rs && !monsters.some(m => m.type === 'banditking') && !monsterBlocked(rs.x, rs.y + 1, now)) {
+    monsters.push({ id: nextMonsterId++, type: 'banditking', x: rs.x, y: rs.y + 1, hx: rs.x, hy: rs.y + 1, hp: MONSTERS.banditking.hp, aggro: false, nextMove: 0, nextAtk: 0 });
   }
   // Keep the dungeons stocked with their monsters.
   for (const d of DUNGEONS) {
@@ -983,7 +1026,9 @@ function marketDrift() {
 
 function townBuyMult(town, id) {
   const b = TOWNS[town].buy, c = itemCategory(id);
-  return b[c] != null ? b[c] : b.default != null ? b.default : 1;
+  // Frosthollow pays double for food while the winter deepens.
+  const winter = town === 'frosthollow' && c === 'food' && state.story.winter > 0 ? 1.6 : 1;
+  return winter * (b[c] != null ? b[c] : b.default != null ? b.default : 1);
 }
 function sellPrice(town, id) {
   const m = state.markets[town];
@@ -992,6 +1037,7 @@ function sellPrice(town, id) {
 const buyPrice = (town, id) => Math.ceil(ITEMS[id].value * state.markets[town].mult[id] * TOWNS[town].markup);
 
 function sell(town, id, n) {
+  if (ITEMS[id].quest) return;
   n = Math.min(n, have(id));
   if (!n) return;
   let total = 0;
@@ -1107,6 +1153,7 @@ function logOrReport(report, text, cls) {
 }
 
 function rollRaids(report) {
+  if (state.story.choice === 'paid') return; // the Bandit King keeps his word
   for (const s of state.structs) {
     const def = structDef(s);
     if (!s.level || !(def.gather || s.type === 'storehouse')) continue;
@@ -1170,7 +1217,10 @@ function update() {
   if (now - lastPoiScan > 500) {
     lastPoiScan = now;
     scanPois();
+    Story.tick();
     ensureBosses(now);
+    // Teleports, carriages and the like put you back on your feet.
+    if (state.sailing && !sailable(Math.round(state.px), Math.round(state.py))) state.sailing = false;
     Sound.update(soundScene());
   }
 
@@ -1230,6 +1280,13 @@ function renderHud() {
         <span title="Bandit threat: raids get likelier as it rises">${Icons.ui('skull')}Threat ${Math.floor(state.threat)}%</span>
         ${wagesPerMin() ? `<span title="Wages per minute">${Icons.ui('people')}${wagesPerMin()}g/min${state.unpaid ? ' <b class="bad">UNPAID</b>' : ''}</span>` : ''}
       </div>`;
+  }
+  const q = Story.current();
+  const qKey = q.main.title + q.main.progress + (q.side ? q.side.title : '');
+  if ($('quest-track').dataset.key !== qKey) {
+    $('quest-track').dataset.key = qKey;
+    $('quest-track').innerHTML = `<b>${esc(q.main.title)}</b>${q.main.progress ? ` <span class="dim small">(${esc(q.main.progress)})</span>` : ''}` +
+      `${q.side ? `<div class="side small">Side: ${esc(q.side.title)}</div>` : ''}`;
   }
   $('zone').textContent = regionName(state.px, state.py);
   const w = state.weather.kind;
@@ -1330,6 +1387,18 @@ function drawMinimap() {
     g.strokeText(name, 0, 4); g.fillText(name, 0, 4);
     g.restore();
   }
+  // The current objective: on the ring when it's off the edge.
+  const tg = Story.target();
+  if (tg) {
+    let dx = tg.x - state.px, dy = tg.y - state.py;
+    const rx = dx * Math.cos(yaw) - dy * Math.sin(yaw), ry = dx * Math.sin(yaw) + dy * Math.cos(yaw);
+    let sx = rx * scale, sy = ry * scale;
+    const lim = size / 2 - 12, dd = Math.hypot(sx, sy);
+    if (dd > lim) { sx *= lim / dd; sy *= lim / dd; }
+    g.restore(); g.save();
+    g.translate(size / 2 + sx, size / 2 + sy);
+    drawStar(g, 7);
+  }
   g.restore();
   // Player arrow, pointing the way you face.
   g.save();
@@ -1359,11 +1428,12 @@ function closePanel() { panel = null; $('panel').classList.add('hidden'); }
 function togglePanel(kind) { if (panel && panel.kind === kind) closePanel(); else openPanel(kind); }
 
 const PANEL_ICONS = { pack: 'bag', skills: 'star', craft: 'anvil', build: 'hammer', struct: 'house', market: 'coin', carriage: 'wheel',
-  empire: 'castle', help: 'book', offline: 'sun', map: 'map', settings: 'gear' };
+  empire: 'castle', help: 'book', offline: 'sun', map: 'map', settings: 'gear', quests: 'scroll', talk: 'people' };
 const PANEL_VIEWS = {
   pack: () => packHtml(), skills: () => skillsHtml(), craft: d => craftHtml(d), build: () => buildHtml(), struct: d => structHtml(d),
   market: d => marketHtml(d), carriage: d => carriageHtml(d), empire: () => empireHtml(), help: () => helpHtml(),
   offline: d => offlineHtml(d), map: () => mapHtml(), settings: () => settingsHtml(),
+  quests: () => Story.questsHtml(), talk: d => Story.talkHtml(d),
 };
 function renderPanel() {
   if (!panel) return;
@@ -1545,6 +1615,7 @@ function marketHtml(data) {
   const ids = Object.keys(state.inv).sort((a, b) => sellPrice(town, b) * have(b) - sellPrice(town, a) * have(a));
   if (!ids.length) html += '<tr><td class="dim">Nothing to sell.</td></tr>';
   for (const id of ids) {
+    if (ITEMS[id].quest) continue;
     html += `<tr><td>${ico(id)} ${esc(itemName(id))} <span class="dim">x${fmt(have(id))}</span></td><td>${sellPrice(town, id)}g ${trend(town, id)}</td>
       <td class="btns"><button data-sell="${id}" data-n="1">1</button><button data-sell="${id}" data-n="10">10</button><button data-sell="${id}" data-n="999999">All</button></td></tr>`;
   }
@@ -1593,6 +1664,11 @@ function mapHtml() {
   return ['World Map', `<canvas id="worldmap" width="${W * 2}" height="${H * 2}"></canvas>
     <p class="small dim">The white dot is you. Yellow squares are your buildings. Towns you haven't visited show as "?".</p>`];
 }
+function drawStar(g, r) {
+  g.beginPath();
+  for (let k = 0; k < 10; k++) { const a = k / 10 * Math.PI * 2 - Math.PI / 2, rr = k % 2 ? r * 0.45 : r; g.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  g.closePath(); g.fillStyle = '#ffd84a'; g.strokeStyle = '#000'; g.lineWidth = 1.5; g.fill(); g.stroke();
+}
 function drawWorldMap() {
   const cv = $('worldmap');
   if (!cv) return;
@@ -1607,7 +1683,9 @@ function drawWorldMap() {
     g.fillRect(d.x * 2 - 4, d.y * 2 - 4, 8, 8);
     g.strokeText(name, d.x * 2, d.y * 2 - 9); g.fillText(name, d.x * 2, d.y * 2 - 9);
   }
-  g.fillStyle = '#fff';
+  const tg = Story.target();
+  if (tg) { g.save(); g.translate(tg.x * 2, tg.y * 2); drawStar(g, 10); g.restore(); }
+  g.fillStyle = '#fff'; g.strokeStyle = '#000';
   g.beginPath(); g.arc(state.px * 2, state.py * 2, 5, 0, Math.PI * 2); g.fill(); g.stroke();
 }
 
@@ -1617,7 +1695,7 @@ function helpHtml() {
   <h3>Controls</h3>
   <p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move, hold <kbd>Shift</kbd> to run | <b>drag the mouse</b> to swing the camera | <b>mouse wheel</b> to zoom<br>
   <kbd>E</kbd> use whatever is in front of you (or click it) | <kbd>F</kbd> eat | <kbd>X</kbd> combat style<br>
-  <kbd>B</kbd> build | <kbd>C</kbd> craft | <kbd>I</kbd> pack | <kbd>K</kbd> skills | <kbd>G</kbd> empire | <kbd>M</kbd> map | <kbd>H</kbd> help | <kbd>Esc</kbd> close, or open settings</p>
+  <kbd>B</kbd> build | <kbd>C</kbd> craft | <kbd>I</kbd> pack | <kbd>K</kbd> skills | <kbd>G</kbd> empire | <kbd>J</kbd> quests | <kbd>M</kbd> map | <kbd>H</kbd> help | <kbd>Esc</kbd> close, or open settings</p>
   <h3>Getting started</h3>
   <ol>
     <li>Gather <b>sticks</b> from the bushes and <b>stones</b> from the loose stones around your camp. Walk up to them and press <kbd>E</kbd>.</li>
@@ -1628,11 +1706,17 @@ function helpHtml() {
     <li>Sell goods in towns. Each town pays more for different things: timber in the mountain town, metal at the forest lodge, rare loot at the black market.</li>
     <li>Bandits raid camps and storehouses. Smith swords and build <b>Guard Towers</b>.</li>
   </ol>
+  <h3>The Long Winter</h3>
+  <p>The winters are growing longer. Your current quest is shown under your stats, and a gold star on the map marks where to go next. Press <kbd>J</kbd> for the quest log and journal.
+  As the story moves on, the world changes with it.</p>
+  <h3>Sailing</h3>
+  <p>Craft a <b>sailboat</b> at a workbench (Crafting 18) or buy one in Saltmere. Face open water and press <kbd>E</kbd> to launch it, and <kbd>E</kbd> again facing the shore to land. Boats are fast, can reach fishing spots far from shore, and monsters can't follow you onto the water.</p>
   <h3>The world</h3>
   <p>Ironhold, the capital, is a short walk north-east of your camp. North over the mountains is <b>Stonedeep</b>, and past it the ogre-haunted highlands.
   To the east looms <b>Mount Skyhorn</b>: a trail spirals to its summit, where starstone veins and a Frost Drake await.
   Old ruins, standing stones, abandoned camps and shrines are scattered across the land, and some hide treasure.
   West is the great forest and <b>Thornwood</b>. South-west on the coast is <b>Saltmere</b>. East across the badlands is the bandit market, <b>Rat's Nest</b>.
+  Further out lie <b>Gloomwater</b> in the western marsh, <b>Amberreach</b> in the eastern desert, <b>Frosthollow</b> in the far northern taiga, and the Corsair Isles off the south coast. Two dungeons lie beneath the marsh and the taiga.
   Once you've visited a town, its carriage can take you back there.</p>
   <p class="small dim">Progress saves to this browser every 15 seconds.</p>
   <button data-close="1">Let's go</button>`];
@@ -1671,6 +1755,7 @@ function onKeyDown(e) {
   else if (k === 'k') togglePanel('skills');
   else if (k === 'g') togglePanel('empire');
   else if (k === 'm') togglePanel('map');
+  else if (k === 'j') togglePanel('quests');
   else if (k === 'h' || k === '?') togglePanel('help');
   else return;
   uiDirty = true;
@@ -1688,11 +1773,12 @@ function onPanelClick(e) {
   if (!b || !panel) return;
   const d = b.dataset, town = panel.data.town;
   if (d.close) closePanel();
+  else if (d.talk) Story.choose(d.talk);
   else if (d.craft) startCraft(d.craft, +d.n, panel.data.sid);
   else if (d.build) startBuildMode(d.build);
   else if (d.sact) structAction(d.sact, structById(panel.data.sid), d.arg);
   else if (d.sell) sell(town, d.sell, +d.n);
-  else if (d.sellall) { for (const id of Object.keys(state.inv)) { const it = ITEMS[id]; if (!it.tool && !it.slot && !it.heal && !it.pack) sell(town, id, have(id)); } }
+  else if (d.sellall) { for (const id of Object.keys(state.inv)) { const it = ITEMS[id]; if (!it.tool && !it.slot && !it.heal && !it.pack && !it.quest && !it.boat) sell(town, id, have(id)); } }
   else if (d.buy) buy(town, d.buy, +d.n);
   else if (d.travel) travel(town, d.travel);
   else if (d.style) state.style = d.style;
@@ -1742,6 +1828,7 @@ function init() {
   window.addEventListener('blur', () => keys.clear());
   $('panel-body').addEventListener('click', onPanelClick);
   $('panel-close').addEventListener('click', closePanel);
+  $('quest-track').addEventListener('click', () => { togglePanel('quests'); uiDirty = true; });
   for (const b of document.querySelectorAll('[data-open]')) {
     b.addEventListener('click', () => { if (b.dataset.open === 'craft') toggleCraft(); else togglePanel(b.dataset.open); uiDirty = true; });
   }

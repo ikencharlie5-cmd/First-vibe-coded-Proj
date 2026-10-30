@@ -43,6 +43,14 @@ kbd {
 .brand { font: 800 15px var(--title); letter-spacing: 4px; color: var(--gold); text-shadow: 0 2px 0 #000; text-transform: uppercase; margin-bottom: 4px; }
 .stat-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 5px; }
 .stat-row > span { display: inline-flex; align-items: center; white-space: nowrap; }
+#quest-track { margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(201, 162, 74, 0.35); font-size: 13px; line-height: 1.3; cursor: pointer; }
+#quest-track b { color: var(--gold); font-family: var(--title); font-size: 13px; }
+#quest-track .side { margin-top: 4px; color: #ffb09a; }
+p.talk { font-style: italic; margin: 0 0 10px; }
+.talk-options { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.talk-options button { text-align: left; }
+ul.journal { padding-left: 18px; margin: 4px 0; font-size: 13px; }
+ul.journal li { margin-bottom: 4px; }
 #hud-target { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); width: 260px; padding: 6px 12px; text-align: center; }
 .target-name { font: 700 15px var(--title); color: #ffb09a; }
 #hud-tr { position: absolute; top: 10px; right: 12px; text-align: center; width: 206px; }

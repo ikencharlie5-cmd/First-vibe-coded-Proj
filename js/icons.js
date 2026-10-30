@@ -4,7 +4,7 @@
 const Icons = (() => {
   const cache = {};
   const S = 64;
-  const METAL = { copper: '#c77a3a', iron: '#a5a5a8', steel: '#dfe6ee', starmetal: '#9a86ff', stone: '#8d8a85', gold: '#e8c547' };
+  const METAL = { copper: '#c77a3a', iron: '#a5a5a8', steel: '#dfe6ee', starmetal: '#9a86ff', stone: '#8d8a85', gold: '#e8c547', frost: '#bfe8ff' };
   const WOOD = { pine: ['#a07448', '#d9b17a'], oak: ['#6e4a2a', '#b88a56'], ironwood: ['#3d3434', '#5fb39c'], frostwood: ['#8a8e96', '#e0eef4'] };
 
   function shade(hex, k) {
@@ -156,6 +156,25 @@ const Icons = (() => {
         g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.strokeStyle = mark; g.lineWidth = 2; g.stroke();
       }
     },
+    boat(g) {
+      poly(g, [[8, 40], [56, 40], [48, 54], [16, 54]], '#7a5232');
+      g.beginPath(); g.moveTo(32, 8); g.lineTo(32, 40); g.strokeStyle = '#3a2210'; g.lineWidth = 3; g.stroke();
+      poly(g, [[34, 10], [52, 36], [34, 36]], '#eee6d0');
+      poly(g, [[30, 14], [14, 36], [30, 36]], '#d8cdb0');
+    },
+    sun(g) {
+      g.fillStyle = '#ffd84a';
+      for (let k = 0; k < 12; k++) { g.save(); g.translate(32, 32); g.rotate(k / 12 * Math.PI * 2); g.fillRect(-2, -28, 4, 10); g.restore(); }
+      ellipse(g, 32, 32, 15, 15, '#e8a83a');
+      ellipse(g, 32, 32, 8, 8, '#fff2b0');
+    },
+    ember(g) {
+      const gl = g.createRadialGradient(32, 32, 2, 32, 32, 30);
+      gl.addColorStop(0, 'rgba(255,160,60,0.9)'); gl.addColorStop(1, 'rgba(255,120,30,0)');
+      g.fillStyle = gl; g.fillRect(0, 0, 64, 64);
+      poly(g, [[32, 10], [48, 26], [44, 48], [32, 56], [20, 48], [16, 26]], '#ff7a2a');
+      poly(g, [[32, 18], [40, 28], [32, 46], [24, 28]], '#ffd27a');
+    },
     crown(g) {
       poly(g, [[10, 48], [10, 20], [20, 32], [32, 14], [44, 32], [54, 20], [54, 48]], '#e8c547');
       for (const [x, c] of [[20, '#c0392b'], [32, '#5a8ad8'], [44, '#5ad86a']]) ellipse(g, x, 40, 4, 4, c);
@@ -205,6 +224,11 @@ const Icons = (() => {
     else if (id === 'doubloon') draw.coin(g, '#e8c547', '#9a7a1a');
     else if (id === 'ancient_coin') draw.coin(g, '#8aa08a', '#4a5a4a');
     else if (id === 'crypt_crown') draw.crown(g);
+    else if (id === 'sailboat') draw.boat(g);
+    else if (id === 'sun_sigil') draw.sun(g);
+    else if (id === 'ember_core') draw.ember(g);
+    else if (id === 'star_shard') draw.star(g, '#c8e8ff');
+    else if (id === 'frostbane') draw.sword(g, 'frost');
     else if (id === 'wurm_scale') draw.scale(g, '#d8f0ff');
     else if (id === 'gold_ring') draw.ring(g, '#e8c547', '#5a8ad8');
     else if (id === 'wolf_pelt') draw.pelt(g);

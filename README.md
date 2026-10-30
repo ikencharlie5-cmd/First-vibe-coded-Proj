@@ -17,7 +17,7 @@ GitHub Pages or by opening `index.html` in a browser. It's made for keyboard and
 | Shift | Run |
 | Drag the mouse | Swing the camera around you |
 | Mouse wheel | Zoom |
-| E or click | Use what's in front of you: gather, attack, trade, build, open a building |
+| E or click | Use what's in front of you: gather, attack, trade, talk, build, launch or beach your boat |
 | F | Eat food |
 | X | Cycle combat style (Attack / Strength / Defence) |
 | B | Build menu |
@@ -25,6 +25,7 @@ GitHub Pages or by opening `index.html` in a browser. It's made for keyboard and
 | I | Pack and gear |
 | K | Skills |
 | G | Empire overview |
+| J | Quest log and journal |
 | M | World map |
 | H | Help |
 | Esc | Close a panel, cancel placing a building, or open settings |
@@ -74,6 +75,19 @@ guarded by a Frost Drake.
 skeletons and ruled by the Crypt Lord, and Frostdeep Cavern, under the taiga, home to cave
 trolls and the Frost Wurm. They are dark, torchlit halls, and each boss guards a hoard.
 
+**The Long Winter.** Each winter is longer than the last. The Royal Herald in Ironhold sends you north to
+Frosthollow, where Elder Ysolde blames something stirring beneath the ice. To end the winter you must
+recover the three relics of the Firstsmiths (from the Crypt Lord, the Buried Temple and the Frost Drake),
+wake the ancient Firstforge at the foot of Mount Skyhorn to make the blade Frostbane, and slay the Frost
+Wurm. The world changes as the story goes on: snow creeps south until it reaches Ironhold, northern lakes
+freeze solid enough to walk on, and Frosthollow pays a fortune for food. The thaw brings spring flowers
+everywhere. In a side story, the Bandit King of Rat's Nest demands a toll: pay it and the raids stop,
+or refuse and face him at the Red Stones. Your quest is shown under your stats, a gold star on the map
+marks the way, and **J** opens the quest log and journal.
+
+**Sailing.** Craft a sailboat (Crafting 18) or buy one in Saltmere. Face open water and press **E** to
+launch it. Boats are fast, can reach fishing spots far from shore, and keep you safe from monsters.
+
 **A living world.** Grass, wildflowers, reeds and mushrooms cover the land. Deer, rabbits
 and birds roam, and fish jump in the lakes. A 20-minute day/night cycle brings starry nights
 with glowing windows and lamps, and the weather turns to rain or fog. Towns bustle with
@@ -115,6 +129,7 @@ then visit http://localhost:8000.
 - `js/world.js`: the hand-designed map: biomes, mountains, Mount Skyhorn, rivers, lakes, coast, islands, roads, towns, town props, ruins, dungeons and resource placement
 - `js/audio.js`: generated music, sound effects and ambience (Web Audio API, no audio files)
 - `js/icons.js`: item icons drawn on canvas, and the interface's SVG icons
+- `js/story.js`: the Long Winter story and the Bandit King side quest: quests, dialogue and world changes
 - `js/game.js`: game logic: movement, gathering, crafting, building, combat, markets, workers, raids, saving and UI panels
 - `js/render3d.js`: the 3D world: terrain, water, sky, weather, day/night, trees, grass, wildlife, towns, buildings, characters, effects and the orbit camera
 - `js/lib/three.min.js`: three.js r149 (MIT licence, see `js/lib/THREE-LICENSE`)

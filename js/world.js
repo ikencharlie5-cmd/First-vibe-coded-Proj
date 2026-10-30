@@ -557,6 +557,7 @@ const POI_DEFS = [
   { id: 'cavern',      kind: 'dungeon', name: 'Frostdeep Cavern',  x: 440, y: 46, dungeon: 'cavern' },
   { id: 'corsaircove', kind: 'camp',   name: 'Corsair Cove',       x: 424, y: 448 },
   { id: 'seashrine',   kind: 'shrine', name: 'Sea Shrine',         x: 270, y: 452 },
+  { id: 'firstforge',  kind: 'forge',  name: 'The Firstforge',     x: 416, y: 262 },
 ];
 
 function decorateWorld(r) {
@@ -627,6 +628,10 @@ function decorateWorld(r) {
       part('firepit', x, y + 1, false);
       part('crates', x + 2, y + 1);
       services.set(idx(x - 1, y + 2), { type: 'chest', poi: def.id });
+    } else if (def.kind === 'forge') {
+      // A cold, ancient forge ringed by pillars, waiting for the relics to wake it.
+      for (const [dx, dy] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) part('pillar', x + dx, y + dy);
+      services.set(idx(x, y), { type: 'forge', poi: def.id });
     } else if (def.kind === 'dungeon') {
       // The entrance leads down into the dungeon; a way back waits in its first room.
       const dg = DUNGEONS.find(d => d.id === def.dungeon);
@@ -788,6 +793,9 @@ function layTown(id, d) {
   const inRect = (x, y, m = 0) => Math.abs(x - d.x) <= d.hw - m && Math.abs(y - d.y) <= d.hh - m;
   services.set(idx(d.pc.x - (d.terraces ? 4 : 3), d.pc.y - (d.terraces ? 1 : 3)), { type: 'market', town: id });
   services.set(idx(d.pc.x + (d.terraces ? 4 : 3), d.pc.y - (d.terraces ? 1 : 3)), { type: 'carriage', town: id });
+  // People with a part in the story wait on the square.
+  const npc = { ironhold: 'herald', frosthollow: 'elder', ratsnest: 'king' }[id];
+  if (npc) services.set(idx(d.pc.x + 2, d.pc.y + 2), { type: 'npc', npc, town: id });
   const street = (x, y) => d.terraces ? Math.abs(x - d.x) <= 2 : Math.abs(x - d.x) <= 2 || Math.abs(y - d.y) <= 2;
   const big = id === 'ironhold';
   const plaza = (x, y) => Math.abs(x - d.pc.x) <= (big ? 5 : 4) && Math.abs(y - d.pc.y) <= (big ? 4 : 2);

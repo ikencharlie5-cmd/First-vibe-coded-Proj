@@ -38,7 +38,9 @@ const Render3D = (() => {
   const flocks = [];         // birds overhead
   const carriers = new Map(); // settlement workers walking to the storehouse
   const poiObjs = [];
-  let windowMat, waterMesh;
+  let windowMat, waterMesh, groundGeo, baseCol, iceMesh = null;
+  const npcObjs = [];
+  let forgeFx = null;
   const STREAM_R = 64;
   const TIER_COLORS = [0x8a8a8a, 0xc77a3a, 0x9c9c9c, 0xd2dae4, 0x8f7bff];
 
@@ -46,6 +48,8 @@ const Render3D = (() => {
   const HIDE = new C.Matrix4().makeTranslation(0, -1000, 0);
   const rnd = (i, k) => { const s = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453; return s - Math.floor(s); };
   const gh = (x, y) => groundHeight(x, y);
+  // Afloat you ride on the water; on frozen lakes you walk on the ice.
+  const playerY = () => state.sailing ? -0.02 : iceAt(Math.round(state.px), Math.round(state.py)) ? Math.max(0.04, gh(state.px, state.py)) : gh(state.px, state.py);
   const matCache = new Map();
   function mat(color, extra) {
     const key = color + (extra ? JSON.stringify(extra) : '');
@@ -150,6 +154,8 @@ const Render3D = (() => {
         gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, fogFactor);
       #endif`);
     };
+    groundGeo = g;
+    baseCol = col.slice();
     const ground = new C.Mesh(g, groundMat);
     ground.receiveShadow = true;
     scene.add(ground);
@@ -217,7 +223,34 @@ const Render3D = (() => {
     return t;
   }
 
+  // ------------------------------------------------------------ the Long Winter
+  // Snow creeps south over the land as the story goes on; in deep winter the northern lakes freeze.
+  const snowEdge = cx => winterLine() + Math.sin(cx * 0.13) * 2.5 + Math.sin(cx * 0.041 + 1) * 5;
+  function setWinter() {
+    const col = groundGeo.attributes.color.array, VW = W + 1;
+    for (let cy = 0; cy <= H; cy++) for (let cx = 0; cx <= W; cx++) {
+      const v = cy * VW + cx, k = v * 3;
+      const amt = cornerH[v] < -0.05 ? 0 : clamp((snowEdge(cx) - cy) / 6, 0, 1) * 0.85;
+      col[k] = lerp(baseCol[k], 0.93, amt); col[k + 1] = lerp(baseCol[k + 1], 0.96, amt); col[k + 2] = lerp(baseCol[k + 2], 0.99, amt);
+    }
+    groundGeo.attributes.color.needsUpdate = true;
+    if (iceMesh) { scene.remove(iceMesh); iceMesh.dispose(); iceMesh = null; }
+    const ice = [];
+    for (let y = 0; y < winterLine(); y++) for (let x = 0; x < W; x++) if (iceAt(x, y)) ice.push([x, y]);
+    if (ice.length) {
+      iceMesh = new C.InstancedMesh(geo('BoxGeometry', 1.02, 0.08, 1.02), new C.MeshPhongMaterial({ color: 0xd8ecf8, shininess: 70, specular: 0xffffff, flatShading: true }), ice.length);
+      ice.forEach(([x, y], k) => iceMesh.setMatrixAt(k, new C.Matrix4().makeTranslation(x, 0.0, y)));
+      iceMesh.receiveShadow = true;
+      iceMesh.frustumCulled = false;
+      scene.add(iceMesh);
+    }
+    streamX = streamY = -999;
+    clutterX = -999;
+  }
+  const snowyAt = (x, y) => y < snowEdge(x) - 2;
+
   // ------------------------------------------------------------ resource nodes (streamed around the player)
+  const SNOW_TINT = new C.Color(0xf2f8fc);
   const ORE = { copper: [0x8a6f5a, 0xff8c3a], iron: [0x7d7570, 0xeadbcc], coal: [0x55524e, 0x141416], bogiron: [0x5a5242, 0xb8622a], gold: [0x8a7f68, 0xffd23a] };
   function nodeParts(res) {
     switch (res) {
@@ -323,7 +356,9 @@ const Render3D = (() => {
       nodeMeshes[n.res].forEach(({ im, p }) => {
         local.compose(v.set(p.x || 0, p.y, p.z || 0), q.identity(), sc.set(1, p.sy || 1, 1));
         im.setMatrixAt(im.count, tmp.copy(base).multiply(local));
-        im.setColorAt(im.count, new C.Color(p.c).offsetHSL(0, 0, p.vary ? (rnd(i, 10) - 0.5) * 0.1 : 0));
+        const c = new C.Color(p.c).offsetHSL(0, 0, p.vary ? (rnd(i, 10) - 0.5) * 0.1 : 0);
+        if (p.vary && snowyAt(x, y)) c.lerp(SNOW_TINT, 0.55);
+        im.setColorAt(im.count, c);
         im.userData.tiles[im.count] = i;
         im.count++;
       });
@@ -468,11 +503,28 @@ const Render3D = (() => {
     a.armL.add(a.shield);
     a.equipKey = '';
     a.vx = state.px; a.vz = state.py; a.rot = state.face;
+    a.boat = sailboatModel();
+    a.boat.visible = false;
+    a.g.add(a.boat);
     a.bar = hpBar();
     a.bar.g.position.y = a.height + 0.3;
     a.g.add(a.bar.g);
     scene.add(a.g);
     return a;
+  }
+
+  // Your sailboat: the player stands amidships.
+  function sailboatModel() {
+    const g = new C.Group();
+    g.add(box(0.95, 0.32, 2.0, 0x7a5232, 0, 0.06, 0), box(0.75, 0.08, 1.7, 0x5a3a20, 0, 0.2, 0), box(0.1, 0.36, 2.0, 0x8a6338, 0.47, 0.12, 0), box(0.1, 0.36, 2.0, 0x8a6338, -0.47, 0.12, 0));
+    const prow = cone(0.48, 0.7, 0x7a5232, 0, 0.1, 1.3, 4); prow.rotation.x = Math.PI / 2; prow.rotation.y = Math.PI / 4; prow.scale.set(1, 1, 0.5); g.add(prow);
+    g.add(cyl(0.045, 0.05, 2.6, 0x5a3a1e, 0, 1.45, 0.35, 5), box(0.05, 0.05, 1.3, 0x5a3a1e, 0, 0.75, -0.1));
+    const sail = new C.Mesh(geo('PlaneGeometry', 1.25, 1.7), new C.MeshLambertMaterial({ color: 0xeee6d0, side: C.DoubleSide }));
+    sail.position.set(0, 1.65, -0.1); sail.rotation.y = Math.PI / 2;
+    g.add(sail);
+    g.add(box(0.05, 0.4, 0.6, 0xb0302a, 0, 2.55, 0.35));
+    g.userData.sail = sail;
+    return g;
   }
 
   function setPlayerTool(kind, tier) {
@@ -619,6 +671,12 @@ const Render3D = (() => {
       for (const sx of [-1, 1]) a.head.add(cone(0.04, 0.1, 0xf2ead0, sx * 0.09, -0.13, 0.15, 4));
       a.hand.add(tool('bigclub'));
     } else if (m.type === 'wurm') a = wurm();
+    else if (m.type === 'banditking') {
+      a = npcModel('king');
+      a.g.children.slice(1).forEach(o => { if (!o.isSprite) a.g.remove(o); });
+      a.inner.scale.setScalar(1.25);
+      a.height = 1.75;
+    }
     else if (m.type === 'goblin') {
       a = humanoid({ tunic: 0x6b4f2a, skin: 0x6fae4a, legs: 0x4a3a22, sleeve: 0x6fae4a, scale: 0.62 });
       const l = cone(0.07, 0.2, 0x6fae4a, -0.19, 0.04, 0, 4), r = cone(0.07, 0.2, 0x6fae4a, 0.19, 0.04, 0, 4);
@@ -1063,6 +1121,33 @@ const Render3D = (() => {
     return a;
   }
 
+  // The people of the story, each with a '!' or '?' over their head when they have something to say.
+  function npcModel(npc) {
+    let a;
+    if (npc === 'herald') {
+      a = humanoid({ tunic: 0xb0302a, skin: 0xe0b08a, legs: 0xe8c547, sleeve: 0xe8c547, scale: 0.85 });
+      a.head.add(box(0.36, 0.08, 0.36, 0x2a2a2a, 0, 0.17, 0), box(0.22, 0.14, 0.22, 0x2a2a2a, 0, 0.27, 0), box(0.04, 0.2, 0.04, 0xf2f2f2, 0.1, 0.38, 0));
+      a.body.add(box(0.44, 0.06, 0.28, 0xe8c547, 0, 0.1, 0));
+      const sc = cyl(0.04, 0.04, 0.32, 0xf2ead8, 0, 0, 0.1, 6); sc.rotation.z = Math.PI / 2; a.hand.add(sc);
+      a.armR.rotation.x = -0.9;
+    } else if (npc === 'elder') {
+      a = humanoid({ tunic: 0x8a8a92, skin: 0xe8c8a8, legs: 0x8a8a92, sleeve: 0x7a7a82, scale: 0.8 });
+      a.body.add(box(0.5, 0.75, 0.32, 0x8a8a92, 0, -0.35, 0), box(0.6, 0.2, 0.4, 0xd8d0c0, 0, 0.22, 0));
+      a.head.add(box(0.34, 0.12, 0.34, 0xf2f2f2, 0, 0.15, -0.02), box(0.2, 0.18, 0.06, 0xf2f2f2, 0, -0.16, 0.14));
+      a.hand.add(cyl(0.03, 0.035, 1.5, 0x6b4a2b, 0, 0.3, 0, 5), mesh(geo('OctahedronGeometry', 0.08, 0), glow(0x9adfff), 0, 1.08, 0, false));
+    } else {
+      a = humanoid({ tunic: 0x3a1a1a, skin: 0xd9a77a, legs: 0x2b2b2b, sleeve: 0x5a1a1a, scale: 1.0 });
+      a.body.add(box(0.5, 0.75, 0.06, 0x8a1a1a, 0, -0.15, -0.17));
+      a.head.add(box(0.34, 0.07, 0.34, 0xe8c547, 0, 0.17, 0));
+      for (let k = 0; k < 4; k++) a.head.add(cone(0.035, 0.12, 0xe8c547, -0.12 + k * 0.08, 0.26, 0.16, 4));
+      a.head.add(box(0.3, 0.1, 0.06, 0x2a1a0a, 0, -0.12, 0.14));
+      a.hand.add(tool('sword', 3));
+      a.g.add(box(0.9, 0.5, 0.7, 0x7a5a3a, 0, 0.25, -0.6), box(0.9, 0.9, 0.15, 0x6a4a2a, 0, 0.7, -0.95));
+    }
+    a.idle = true;
+    return a;
+  }
+
   function buildTowns() {
     // Every town's houses and landmark are baked together into a few meshes.
     for (const id in TOWN_DEFS) {
@@ -1085,6 +1170,21 @@ const Render3D = (() => {
       scene.add(bake(tg));
     }
     for (const [i, svc] of services) {
+      if (svc.type === 'npc') {
+        const x = i % W, y = (i - x) / W, a = npcModel(svc.npc);
+        a.g.position.set(x, tileH[i], y);
+        a.g.rotation.y = Math.atan2(TOWN_DEFS[svc.town].pc.x - x, TOWN_DEFS[svc.town].pc.y - y);
+        const name = makeLabel(cap(NPC_NAMES[svc.npc].replace(/^the /, '')), { color: '#ffe9a8', h: 0.28 });
+        name.position.y = a.height * 0.9 + 0.75;
+        const marks = { '!': makeLabel('!', { color: '#ffd84a', size: 64, h: 0.6 }), '?': makeLabel('?', { color: '#c8c8c8', size: 64, h: 0.6 }) };
+        for (const m of Object.values(marks)) { m.position.y = a.height * 0.9 + 1.25; m.visible = false; a.g.add(m); }
+        a.g.add(name);
+        a.g.traverse(o => { o.userData.tile = i; });
+        scene.add(a.g);
+        pickables.push(a.g);
+        npcObjs.push({ a, npc: svc.npc, marks });
+        continue;
+      }
       if (svc.type !== 'market' && svc.type !== 'carriage') continue;
       const x = i % W, y = (i - x) / W, h = tileH[i];
       const g = new C.Group();
@@ -1517,6 +1617,20 @@ const Render3D = (() => {
         const x = i % W, y = (i - x) / W;
         const sg = new C.Group();
         if (svc.type === 'chest') { const chest = chestModel(!!state.opened[svc.poi]); chests.push({ chest, key: svc.poi }); sg.add(chest); }
+        else if (svc.type === 'forge') {
+          sg.add(box(2.2, 0.4, 1.6, 0x6a665e, 0, 0.2, 0), box(1.6, 0.9, 1.1, 0x7a766e, 0, 0.85, -0.1), mesh(geo('BoxGeometry', 0.9, 0.08, 0.6), mat(0x2a2420), 0, 1.32, -0.1, false));
+          sg.add(box(0.7, 2.6, 0.7, 0x5a564e, 0, 2.6, -0.45), box(0.9, 0.2, 0.9, 0x6a665e, 0, 3.95, -0.45));
+          sg.add(cyl(0.3, 0.35, 0.4, 0x5a564e, 1.4, 0.2, 0.6, 7), box(0.7, 0.2, 0.32, 0x3a3a42, 1.4, 0.5, 0.6), box(0.3, 0.12, 0.2, 0x3a3a42, 1.8, 0.5, 0.6));
+          for (const [rx, rz] of [[-0.6, 0.46], [0, 0.46], [0.6, 0.46]]) sg.add(mesh(geo('BoxGeometry', 0.25, 0.25, 0.04), mat(0x8a6a3a, { emissive: 0xffb040, emissiveIntensity: 0 }), rx, 0.9, rz, false));
+          const fx = new C.Group();
+          fx.add(mesh(geo('BoxGeometry', 0.8, 0.06, 0.5), glow(0xff8a2a), 0, 1.36, -0.1, false));
+          flame(fx, -0.2, 1.55, -0.1, 0.9); flame(fx, 0.2, 1.5, -0.1, 0.8);
+          const gl = glowSprite(0xffb040, 5, false); gl.position.set(0, 1.8, -0.1); fx.add(gl);
+          const pl = new C.PointLight(0xffa040, 1.4, 12, 1.6); pl.position.set(0, 2.2, 0.6); fx.add(pl);
+          fx.visible = false;
+          sg.add(fx);
+          forgeFx = { fx, runes: sg.children.filter(o => o.material && o.material.emissive && o.material.emissive.getHex() === 0xffb040) };
+        }
         else if (svc.type === 'portal') {
           const below = !!inDungeonRect(x, y);
           sg.add(portalModel(!below));
@@ -1643,8 +1757,15 @@ const Render3D = (() => {
       if (t === T.SAND) { if (r2 < 0.08 * dens) { const px = jx(), pz = jz(); put('rock', px, pz, gh(px, pz), r3 * 6, 0.6 + r1, 0xa09a90); } continue; }
       const grassP = ({ [BIOME.MEADOW]: 0.95, [BIOME.FOREST]: 0.75, [BIOME.HIGHLANDS]: 0.6, [BIOME.BADLANDS]: 0.35, [BIOME.MARSH]: 0.9, [BIOME.DESERT]: 0.12, [BIOME.TAIGA]: 0.4, [BIOME.ISLES]: 0.85 }[b] || 0) * dens * (hasNode ? 0.5 : 1);
       const tufts = r1 < grassP ? (r2 < 0.5 ? 2 : 1) : 0;
-      for (let k = 0; k < tufts; k++) { const px = jx(), pz = jz(); put('tuft', px, pz, gh(px, pz), Math.random() * 6, 0.5 + Math.random() * 0.4, tileH[i] > 1.6 ? 0x8a9a6a : BIOME_GRASS[b]); }
+      const snowy = b !== BIOME.TAIGA && snowyAt(x, y);
+      for (let k = 0; k < tufts; k++) { const px = jx(), pz = jz(); put('tuft', px, pz, gh(px, pz), Math.random() * 6, 0.5 + Math.random() * 0.4, snowy ? 0xb8c8c0 : tileH[i] > 1.6 ? 0x8a9a6a : BIOME_GRASS[b]); }
       if (hasNode) continue;
+      if (snowy) { if (r3 < 0.5 * dens) { const px = jx(), pz = jz(); put('snow', px, pz, gh(px, pz) - 0.02, r1 * 6, 0.8 + r2, 0xf2f8fc); } continue; }
+      // After the thaw, spring flowers everywhere.
+      if (winterLevel() < 0 && b !== BIOME.DESERT && r3 > 0.9 - 0.1 * dens) {
+        const c = FLOWER_COLORS[Math.floor(r1 * FLOWER_COLORS.length)];
+        for (let k = 0; k < 3; k++) { const px = jx(), pz = jz(); put('flower', px, pz, gh(px, pz), 0, 0.8 + Math.random() * 0.5, c); }
+      }
       if (b === BIOME.TAIGA && r3 < 0.3 * dens) { const px = jx(), pz = jz(); put('snow', px, pz, gh(px, pz) - 0.02, r1 * 6, 0.7 + r2 * 0.9, 0xf2f8fc); }
       if (b === BIOME.MARSH && r3 > 0.9 - 0.06 * dens) { const px = jx(), pz = jz(); put('mushroom', px, pz, gh(px, pz), 0, 0.8 + r1, r2 < 0.5 ? 0xa8b04a : 0x8a7a5a); }
       if (b === BIOME.ISLES && r3 < 0.06 * dens) { const c = FLOWER_COLORS[Math.floor(r2 * FLOWER_COLORS.length)]; const px = jx(), pz = jz(); put('flower', px, pz, gh(px, pz), 0, 1, c); }
@@ -1846,18 +1967,20 @@ const Render3D = (() => {
       c.userData.mat.color.setHex(0xffffff).lerp(cB.setHex(0x6a7280), gloom).multiplyScalar(0.35 + 0.65 * day);
     }
     rain.visible = rainAmt > 0.02 && underAmt < 0.5;
+    const snowing = snowyAt(camPos.x, camPos.z) || biome[idx(Math.round(camPos.x), Math.round(camPos.z))] === BIOME.TAIGA;
     waterMesh.visible = underAmt < 0.5;
     if (rain.visible) {
       const arr = rain.geometry.attributes.position.array, drops = rain.userData.drops;
       for (let k = 0; k < drops.length; k++) {
         const d = drops[k];
-        d[1] -= dt * 28;
+        d[1] -= dt * (snowing ? 4 : 28);
         if (d[1] < -2) { d[1] = 28; d[0] = Math.random() * 50 - 25; d[2] = Math.random() * 50 - 25; }
-        const x = camPos.x + d[0], y = camPos.y - 8 + d[1], z = camPos.z + d[2];
-        arr.set([x, y, z, x + 0.05, y - 0.6, z], k * 6);
+        const x = camPos.x + d[0] + (snowing ? Math.sin(t + k) * 0.4 : 0), y = camPos.y - 8 + d[1], z = camPos.z + d[2];
+        arr.set(snowing ? [x, y, z, x + 0.08, y - 0.08, z] : [x, y, z, x + 0.05, y - 0.6, z], k * 6);
       }
       rain.geometry.attributes.position.needsUpdate = true;
-      rain.material.opacity = 0.45 * rainAmt;
+      rain.material.color.setHex(snowing ? 0xffffff : 0xaabbd0);
+      rain.material.opacity = (snowing ? 0.9 : 0.45) * rainAmt;
     }
     return gloom;
   }
@@ -2376,17 +2499,29 @@ const Render3D = (() => {
         if (s) { const c = structCenter(s); player.rot = lerpAngle(player.rot, Math.atan2(c.x - state.px, c.y - state.py), Math.min(1, dt * 10)); }
       }
     } else setPlayerTool(state.equip.weapon ? (state.equip.weapon === 'wooden_club' ? 'club' : 'sword') : null, state.equip.weapon ? ITEMS[state.equip.weapon].tier : 0);
-    player.g.position.set(player.vx, gh(player.vx, player.vz), player.vz);
+    const afloat = !!state.sailing;
+    player.boat.visible = afloat;
+    player.g.position.set(player.vx, playerY() + (afloat ? Math.sin(t * 1.7) * 0.04 : 0), player.vz);
     player.g.rotation.y = player.rot;
-    animateLimbs(player, moving, acting && !moving, dt, t, keys.has('shift') ? 17 : 13);
+    if (afloat) {
+      player.g.rotation.z = Math.sin(t * 1.3) * 0.04;
+      player.inner.position.y = 0.22;
+      player.boat.userData.sail.scale.x = 1 + (moving ? 0.12 : 0.03) * Math.sin(t * 4);
+      animateLimbs(player, false, acting, dt, t);
+      player.inner.position.y = 0.22;
+      if (moving && Math.random() < dt * 0.8) Sound.sfx('splash');
+    } else {
+      player.g.rotation.z = 0;
+      animateLimbs(player, moving, acting && !moving, dt, t, keys.has('shift') ? 17 : 13);
+    }
     // Footsteps, softer on grass than on stone.
     const ph = Math.floor(player.walk / Math.PI);
-    if (moving && ph !== stepPhase) {
+    if (moving && !afloat && ph !== stepPhase) {
       const tt = terrain[idx(Math.round(state.px), Math.round(state.py))];
       Sound.sfx(tt === T.FLOOR || tt === T.ROAD || tt === T.BRIDGE || tt === T.PEAK ? 'stepstone' : 'step');
     }
     stepPhase = ph;
-    lantern.position.set(player.vx, gh(player.vx, player.vz) + 2.2, player.vz);
+    lantern.position.set(player.vx, playerY() + 2.2, player.vz);
     setBar(player.bar, state.hp / maxHp(), state.hp < maxHp());
 
     // Monsters
@@ -2427,6 +2562,16 @@ const Render3D = (() => {
       if (!w.a.g.parent.visible) continue;
       wander(w, dt, t);
       if (w.a.carry) w.a.armR.rotation.x = -1.1;
+    }
+    for (const n of npcObjs) {
+      const here = Story.npcHere(n.npc), mark = here ? Story.npcMark(n.npc) : '';
+      n.a.g.visible = here;
+      n.marks['!'].visible = mark === '!'; n.marks['?'].visible = mark === '?';
+      n.marks['!'].position.y = n.a.height * 0.9 + 1.25 + Math.sin(t * 3) * 0.08;
+    }
+    if (forgeFx && forgeFx.fx.visible !== !!state.story.forgeLit) {
+      forgeFx.fx.visible = !!state.story.forgeLit;
+      for (const r of forgeFx.runes) r.material.emissiveIntensity = state.story.forgeLit ? 1 : 0;
     }
     for (const po of poiObjs) {
       po.label.visible = Math.hypot(po.p.x - player.vx, po.p.y - player.vz) < 22;
@@ -2476,7 +2621,7 @@ const Render3D = (() => {
     const k = Math.min(1, dt * 10);
     camX += (player.vx - camX) * k;
     camZ += (player.vz - camZ) * k;
-    camY += (gh(player.vx, player.vz) - camY) * k;
+    camY += (playerY() - camY) * k;
     const yaw = state.camYaw;
     let cxp = camX + Math.sin(yaw) * Math.cos(pitch) * zoom;
     let czp = camZ + Math.cos(yaw) * Math.cos(pitch) * zoom;
@@ -2529,6 +2674,7 @@ const Render3D = (() => {
     buildClutter();
     buildTowns();
     buildSky();
+    setWinter();
     player = buildPlayer();
     camX = state.px; camZ = state.py; camY = gh(state.px, state.py);
     interactMark = marker(0xffffff, 0.7, 0.55);
@@ -2542,5 +2688,5 @@ const Render3D = (() => {
 
   function start() { requestAnimationFrame(frame); }
 
-  return { init, start, setQuality };
+  return { init, start, setQuality, setWinter };
 })();

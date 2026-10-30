@@ -80,6 +80,12 @@ const ITEMS = {
   satchel:        { name: 'Satchel',        value: 60,  pack: 25 },
   leather_pack:   { name: 'Leather pack',   value: 180, pack: 60 },
   explorer_pack:  { name: "Explorer's pack", value: 650, pack: 100 },
+  sailboat:       { name: 'Sailboat',       value: 700, boat: true },
+  // The Long Winter: relics of the Firstsmiths and the blade they make.
+  ember_core:     { name: 'Ember Core',     value: 0, quest: true },
+  sun_sigil:      { name: 'Sun Sigil',      value: 0, quest: true },
+  star_shard:     { name: 'Star-anvil Shard', value: 0, quest: true },
+  frostbane:      { name: 'Frostbane',      value: 0, quest: true, slot: 'weapon', tier: 5, req: 30, sword: true, stats: { acc: 58, str: 52 } },
 };
 
 // Metal tiers used for smelting + smithing.
@@ -132,6 +138,7 @@ addRecipe({ id: 'stone_pickaxe', skill: 'crafting', level: 1,  xp: 10, hand: tru
 addRecipe({ id: 'fishing_rod',   skill: 'crafting', level: 2,  xp: 14, inputs: { stick: 3, pine_log: 1 },        outputs: { fishing_rod: 1 } });
 addRecipe({ id: 'wooden_club',   skill: 'crafting', level: 3,  xp: 16, inputs: { pine_log: 2 },                  outputs: { wooden_club: 1 } });
 addRecipe({ id: 'satchel',       skill: 'crafting', level: 6,  xp: 40, inputs: { pine_plank: 4, stick: 6 },      outputs: { satchel: 1 } });
+addRecipe({ id: 'sailboat', skill: 'crafting', level: 18, xp: 220, inputs: { oak_plank: 16, iron_bar: 4, wolf_pelt: 2 }, outputs: { sailboat: 1 } });
 addRecipe({ id: 'explorer_pack', skill: 'crafting', level: 25, xp: 160, inputs: { bear_pelt: 2, lurker_hide: 2, frostwood_plank: 2 }, outputs: { explorer_pack: 1 } });
 addRecipe({ id: 'leather_pack',  skill: 'crafting', level: 15, xp: 90, inputs: { wolf_pelt: 3, oak_plank: 2 },   outputs: { leather_pack: 1 } });
 
@@ -172,11 +179,12 @@ for (const t of TIERS) {
 // Price category for each item, used by town markets.
 function itemCategory(id) {
   const it = ITEMS[id];
+  if (it.quest) return 'quest';
   if (it.rare) return 'rare';
   if (it.luxury) return 'luxury';
   if (it.heal) return 'food';
   if (it.slot) return 'gear';
-  if (it.tool || it.pack) return 'tools';
+  if (it.tool || it.pack || it.boat) return 'tools';
   if (id.endsWith('_log')) return 'logs';
   if (id.endsWith('_plank')) return 'planks';
   if (id.endsWith('_ore') || id === 'coal') return 'ore';
@@ -197,6 +205,9 @@ const MONSTERS = {
   // The guardian of Mount Skyhorn's summit. Only one exists; it returns a while after being slain.
   drake:  { name: 'Frost Drake', level: 45, hp: 110, atk: 40, def: 35, maxHit: 11, speed: 2800, move: 700, aggressive: true,
             coins: [80, 200], drops: [['drake_scale', 1], ['star_fragment', 1 / 2], ['rough_gem', 1 / 2]], boss: true },
+  // The side story's villain: only appears if you refuse him tribute.
+  banditking: { name: 'The Bandit King', level: 42, hp: 130, atk: 38, def: 34, maxHit: 10, speed: 2400, move: 600, aggressive: true,
+            coins: [400, 800], drops: [['bandit_signet', 1], ['rough_gem', 1]], boss: true, quest: true },
   // Outer regions
   lurker:   { name: 'Bog Lurker',     level: 20, hp: 32, atk: 18, def: 14, maxHit: 5, speed: 2600, move: 800, aggressive: true,
               coins: [5, 25],  drops: [['lurker_hide', 1 / 2], ['rough_gem', 1 / 20]] },
@@ -256,7 +267,7 @@ const TOWNS = {
                sells: ['stone', 'copper_ore', 'iron_ore', 'coal', 'copper_bar', 'iron_bar'] },
   saltmere:  { name: 'Saltmere',   kind: 'fishing',  desc: 'A fishing village on the southern coast. Pays well for boat timber and metal.',
                buy: { planks: 1.5, bars: 1.3, tools: 1.3, fish: 0.6, food: 0.7 }, markup: 1.2,
-               sells: ['raw_trout', 'raw_pike', 'trout', 'pike', 'fishing_rod'] },
+               sells: ['raw_trout', 'raw_pike', 'trout', 'pike', 'fishing_rod', 'sailboat'] },
   thornwood: { name: 'Thornwood',  kind: 'forest',   desc: 'A lodge deep in the western forest. Rich in timber, short of metal.',
                buy: { bars: 1.4, gear: 1.3, food: 1.3, ore: 1.2, logs: 0.6, planks: 0.8 }, markup: 1.2,
                sells: ['pine_log', 'oak_log', 'ironwood_log', 'pine_plank', 'oak_plank'] },
