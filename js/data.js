@@ -81,6 +81,10 @@ const ITEMS = {
   leather_pack:   { name: 'Leather pack',   value: 180, pack: 60 },
   explorer_pack:  { name: "Explorer's pack", value: 650, pack: 100 },
   sailboat:       { name: 'Sailboat',       value: 700, boat: true },
+  horse:          { name: 'Horse',          value: 450, mount: true },
+  pet_dog:        { name: 'Hound',          value: 150, pet: 'dog' },
+  pet_cat:        { name: 'Cat',            value: 90,  pet: 'cat' },
+  wolf_pup:       { name: 'Wolf pup',       value: 400, pet: 'wolf', rare: true },
   // The Long Winter: relics of the Firstsmiths and the blade they make.
   ember_core:     { name: 'Ember Core',     value: 0, quest: true },
   sun_sigil:      { name: 'Sun Sigil',      value: 0, quest: true },
@@ -184,7 +188,7 @@ function itemCategory(id) {
   if (it.luxury) return 'luxury';
   if (it.heal) return 'food';
   if (it.slot) return 'gear';
-  if (it.tool || it.pack || it.boat) return 'tools';
+  if (it.tool || it.pack || it.boat || it.mount || it.pet) return 'tools';
   if (id.endsWith('_log')) return 'logs';
   if (id.endsWith('_plank')) return 'planks';
   if (id.endsWith('_ore') || id === 'coal') return 'ore';
@@ -197,35 +201,45 @@ const MONSTERS = {
   goblin: { name: 'Goblin', level: 2,  hp: 5,  atk: 1,  def: 1,  maxHit: 1, speed: 2400, move: 700, aggressive: false,
             coins: [1, 8],   drops: [['goblin_trinket', 1 / 8], ['rough_gem', 1 / 40]] },
   wolf:   { name: 'Wolf',   level: 7,  hp: 12, atk: 6,  def: 4,  maxHit: 2, speed: 2000, move: 450, aggressive: true,
-            coins: [0, 0],   drops: [['wolf_pelt', 1 / 2]] },
+            coins: [0, 0],   drops: [['wolf_pelt', 1 / 2], ['wolf_pup', 1 / 60]] },
   bandit: { name: 'Bandit', level: 14, hp: 22, atk: 12, def: 10, maxHit: 4, speed: 2400, move: 550, aggressive: true,
             coins: [10, 40], drops: [['bandit_signet', 1 / 12], ['iron_bar', 1 / 8], ['rough_gem', 1 / 25]], threat: -8 },
   ogre:   { name: 'Ogre',   level: 28, hp: 50, atk: 25, def: 20, maxHit: 7, speed: 3000, move: 800, aggressive: true,
-            coins: [20, 60], drops: [['star_fragment', 1 / 4], ['ogre_tusk', 1 / 3], ['rough_gem', 1 / 10]] },
+            coins: [20, 60], drops: [['star_fragment', 1 / 4], ['ogre_tusk', 1 / 3], ['rough_gem', 1 / 10]],
+            specials: [{ kind: 'slam', name: 'ground slam', every: 9000, wind: 1300, r: 2.2, dmg: 1.4, say: 'The % raises its club high!' }] },
   // The guardian of Mount Skyhorn's summit. Only one exists; it returns a while after being slain.
   drake:  { name: 'Frost Drake', level: 45, hp: 110, atk: 40, def: 35, maxHit: 11, speed: 2800, move: 700, aggressive: true,
-            coins: [80, 200], drops: [['drake_scale', 1], ['star_fragment', 1 / 2], ['rough_gem', 1 / 2]], boss: true },
+            coins: [80, 200], drops: [['drake_scale', 1], ['star_fragment', 1 / 2], ['rough_gem', 1 / 2]], boss: true,
+            specials: [{ kind: 'breath', name: 'frost breath', every: 7000, wind: 1400, r: 5.5, arc: 0.55, dmg: 1.5, say: 'The % draws a deep, freezing breath!' },
+                       { kind: 'slam', name: 'tail sweep', every: 7000, wind: 1100, r: 2.6, dmg: 1.2, say: 'The % coils its tail...' }] },
   // The side story's villain: only appears if you refuse him tribute.
   banditking: { name: 'The Bandit King', level: 42, hp: 130, atk: 38, def: 34, maxHit: 10, speed: 2400, move: 600, aggressive: true,
-            coins: [400, 800], drops: [['bandit_signet', 1], ['rough_gem', 1]], boss: true, quest: true },
+            coins: [400, 800], drops: [['bandit_signet', 1], ['rough_gem', 1]], boss: true, quest: true,
+            specials: [{ kind: 'slam', name: 'whirling blades', every: 7000, wind: 900, r: 2.2, dmg: 1.3, say: 'The % spins into a whirl of steel!' }] },
   // Outer regions
   lurker:   { name: 'Bog Lurker',     level: 20, hp: 32, atk: 18, def: 14, maxHit: 5, speed: 2600, move: 800, aggressive: true,
               coins: [5, 25],  drops: [['lurker_hide', 1 / 2], ['rough_gem', 1 / 20]] },
   scorpion: { name: 'Sand Scorpion',  level: 24, hp: 36, atk: 22, def: 22, maxHit: 6, speed: 2200, move: 500, aggressive: true,
               coins: [0, 0],   drops: [['scorpion_stinger', 1 / 2]] },
   bear:     { name: 'Snow Bear',      level: 32, hp: 60, atk: 28, def: 24, maxHit: 8, speed: 2800, move: 600, aggressive: true,
-              coins: [0, 0],   drops: [['bear_pelt', 1 / 2]] },
+              coins: [0, 0],   drops: [['bear_pelt', 1 / 2]],
+              specials: [{ kind: 'slam', name: 'mauling swipe', every: 10000, wind: 1000, r: 1.9, dmg: 1.3, say: 'The % rears up on its hind legs!' }] },
   pirate:   { name: 'Pirate',         level: 26, hp: 40, atk: 26, def: 20, maxHit: 7, speed: 2400, move: 550, aggressive: true,
               coins: [20, 80], drops: [['doubloon', 1 / 5], ['steel_bar', 1 / 10]] },
   // Dungeons
   skeleton: { name: 'Skeleton',       level: 22, hp: 30, atk: 22, def: 18, maxHit: 6, speed: 2400, move: 650, aggressive: true,
               coins: [5, 30],  drops: [['ancient_coin', 1 / 6]] },
   cryptlord: { name: 'Crypt Lord',    level: 40, hp: 140, atk: 36, def: 32, maxHit: 10, speed: 2800, move: 800, aggressive: true,
-              coins: [100, 250], drops: [['crypt_crown', 1], ['ancient_coin', 1]], boss: true },
+              coins: [100, 250], drops: [['crypt_crown', 1], ['ancient_coin', 1]], boss: true,
+              specials: [{ kind: 'summon', name: 'dark chant', every: 16000, wind: 1600, n: 2, type: 'skeleton', say: 'The % begins a rasping chant...' },
+                         { kind: 'slam', name: 'death nova', every: 8000, wind: 1300, r: 2.8, dmg: 1.4, say: 'Dark power swirls around the %!' }] },
   troll:    { name: 'Cave Troll',     level: 34, hp: 70, atk: 30, def: 28, maxHit: 9, speed: 3000, move: 850, aggressive: true,
-              coins: [10, 50], drops: [['troll_hide', 1 / 2], ['coal', 1 / 3]] },
+              coins: [10, 50], drops: [['troll_hide', 1 / 2], ['coal', 1 / 3]],
+              specials: [{ kind: 'slam', name: 'ground slam', every: 9000, wind: 1300, r: 2.4, dmg: 1.4, say: 'The % lifts its club over its head!' }] },
   wurm:     { name: 'Frost Wurm',     level: 48, hp: 160, atk: 42, def: 36, maxHit: 12, speed: 3000, move: 700, aggressive: true,
-              coins: [120, 300], drops: [['wurm_scale', 1], ['star_fragment', 1]], boss: true },
+              coins: [120, 300], drops: [['wurm_scale', 1], ['star_fragment', 1]], boss: true,
+              specials: [{ kind: 'breath', name: 'ice breath', every: 6500, wind: 1400, r: 6, arc: 0.6, dmg: 1.5, say: 'The % rears back, frost gathering in its jaws!' },
+                         { kind: 'slam', name: 'crushing coil', every: 6500, wind: 1200, r: 3, dmg: 1.3, say: 'The % thrashes its great body!' }] },
 };
 
 // Everything the player can build. `con` is the Construction level needed; `work` is how
@@ -270,16 +284,16 @@ const STRUCT_MAX_LEVEL = 3;
 const TOWNS = {
   ironhold:  { name: 'Ironhold',   kind: 'capital',  desc: 'The royal capital. Fair prices for everything.',
                buy: {}, markup: 1.5,
-               sells: ['stick', 'stone', 'pine_log', 'copper_ore', 'raw_minnow', 'minnow', 'pine_plank'] },
+               sells: ['stick', 'stone', 'pine_log', 'copper_ore', 'raw_minnow', 'minnow', 'pine_plank', 'horse', 'pet_dog'] },
   stonedeep: { name: 'Stonedeep',  kind: 'mining',   desc: 'A mining town high in the mountains. Hungry for food and timber.',
                buy: { food: 1.6, planks: 1.45, logs: 1.3, tools: 1.25, ore: 0.7, bars: 0.85 }, markup: 1.2,
                sells: ['stone', 'copper_ore', 'iron_ore', 'coal', 'copper_bar', 'iron_bar'] },
   saltmere:  { name: 'Saltmere',   kind: 'fishing',  desc: 'A fishing village on the southern coast. Pays well for boat timber and metal.',
                buy: { planks: 1.5, bars: 1.3, tools: 1.3, fish: 0.6, food: 0.7 }, markup: 1.2,
-               sells: ['raw_trout', 'raw_pike', 'trout', 'pike', 'fishing_rod', 'sailboat'] },
+               sells: ['raw_trout', 'raw_pike', 'trout', 'pike', 'fishing_rod', 'sailboat', 'pet_cat'] },
   thornwood: { name: 'Thornwood',  kind: 'forest',   desc: 'A lodge deep in the western forest. Rich in timber, short of metal.',
                buy: { bars: 1.4, gear: 1.3, food: 1.3, ore: 1.2, logs: 0.6, planks: 0.8 }, markup: 1.2,
-               sells: ['pine_log', 'oak_log', 'ironwood_log', 'pine_plank', 'oak_plank'] },
+               sells: ['pine_log', 'oak_log', 'ironwood_log', 'pine_plank', 'oak_plank', 'pet_dog'] },
   ratsnest:  { name: "Rat's Nest", kind: 'black',    desc: 'A bandit black market in the badlands. Pays a fortune for rare goods, no questions asked.',
                buy: { rare: 1.9, gear: 1.2, default: 0.75 }, markup: 2.2,
                sells: ['star_fragment', 'wolf_pelt', 'rough_gem', 'steel_bar'] },
@@ -291,7 +305,7 @@ const TOWNS = {
                sells: ['gold_ore', 'gold_bar', 'copper_ore', 'copper_bar', 'rough_gem'] },
   frosthollow: { name: 'Frosthollow', kind: 'taiga', desc: 'A hardy town in the frozen north. Needs food, metal and armour to survive the cold.',
                buy: { food: 1.6, bars: 1.3, gear: 1.35, ore: 1.2, logs: 0.7 }, markup: 1.25,
-               sells: ['frostwood_log', 'frostwood_plank', 'coal', 'iron_ore', 'pike'] },
+               sells: ['frostwood_log', 'frostwood_plank', 'coal', 'iron_ore', 'pike', 'horse'] },
 };
 
 const EMPIRE = {

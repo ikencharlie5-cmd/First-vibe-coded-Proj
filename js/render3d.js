@@ -251,6 +251,15 @@ const Render3D = (() => {
 
   // ------------------------------------------------------------ resource nodes (streamed around the player)
   const SNOW_TINT = new C.Color(0xf2f8fc);
+  const AUTUMN = [0xd8702a, 0xc0402a, 0xe0a030, 0xa85a2a].map(h => new C.Color(h)), BLOSSOM = new C.Color(0xf4b8d0), tmpC = new C.Color();
+  // Leaves turn with the seasons: blossom in spring, gold and red in autumn, frost in winter.
+  function seasonTint(c, res, i) {
+    const s = seasonIdx(), leafy = res === 'oak';
+    if (s === 0 && leafy && rnd(i, 31) < 0.3) c.lerp(BLOSSOM, 0.6);
+    else if (s === 2 && leafy) c.lerp(AUTUMN[Math.floor(rnd(i, 32) * 4)], 0.75);
+    else if (s === 2) c.lerp(tmpC.setHex(0x8a7a3a), 0.15);
+    else if (s === 3) c.lerp(SNOW_TINT, leafy ? 0.45 : 0.3);
+  }
   const ORE = { copper: [0x8a6f5a, 0xff8c3a], iron: [0x7d7570, 0xeadbcc], coal: [0x55524e, 0x141416], bogiron: [0x5a5242, 0xb8622a], gold: [0x8a7f68, 0xffd23a] };
   function nodeParts(res) {
     switch (res) {
@@ -358,6 +367,7 @@ const Render3D = (() => {
         im.setMatrixAt(im.count, tmp.copy(base).multiply(local));
         const c = new C.Color(p.c).offsetHSL(0, 0, p.vary ? (rnd(i, 10) - 0.5) * 0.1 : 0);
         if (p.vary && snowyAt(x, y)) c.lerp(SNOW_TINT, 0.55);
+        else if (p.vary && tree) seasonTint(c, n.res, i);
         im.setColorAt(im.count, c);
         im.userData.tiles[im.count] = i;
         im.count++;
@@ -506,6 +516,9 @@ const Render3D = (() => {
     a.boat = sailboatModel();
     a.boat.visible = false;
     a.g.add(a.boat);
+    a.horse = animal('horse');
+    a.horse.g.visible = false;
+    a.g.add(a.horse.g);
     a.bar = hpBar();
     a.bar.g.position.y = a.height + 0.3;
     a.g.add(a.bar.g);
@@ -1426,6 +1439,20 @@ const Render3D = (() => {
       if (Math.random() < 0.5) for (const s of [-1, 1]) { const ant = cyl(0.015, 0.02, 0.35, 0xe0d6c0, s * 0.08, 1.52, 0.5, 4); ant.rotation.z = s * 0.4; inner.add(ant); }
       legs([[-0.1, 0.3], [0.1, 0.3], [-0.1, -0.3], [0.1, -0.3]], 0.64, 0.07, 0x8a5a2e);
       a.height = 1.5;
+    } else if (kind === 'horse') {
+      const c = 0x7a4a2a, dk = 0x4a2a14;
+      inner.add(box(0.42, 0.45, 1.15, c, 0, 1.05, 0), box(0.24, 0.5, 0.26, c, 0, 1.4, 0.58), box(0.22, 0.22, 0.42, c, 0, 1.62, 0.8));
+      inner.add(box(0.06, 0.45, 0.28, dk, 0, 1.55, 0.5), box(0.08, 0.5, 0.08, dk, 0, 0.95, -0.62));
+      inner.add(box(0.46, 0.08, 0.5, 0x8a2a2a, 0, 1.3, 0.05), box(0.36, 0.12, 0.42, 0x5a3a20, 0, 1.36, 0.05));
+      for (const sx of [-1, 1]) inner.add(box(0.05, 0.1, 0.06, dk, sx * 0.08, 1.8, 0.72));
+      legs([[-0.14, 0.42], [0.14, 0.42], [-0.14, -0.42], [0.14, -0.42]], 0.85, 0.11, dk);
+      a.height = 1.9;
+    } else if (kind === 'cat') {
+      const c = 0xe0a050;
+      inner.add(box(0.16, 0.16, 0.36, c, 0, 0.22, 0), box(0.15, 0.14, 0.14, c, 0, 0.3, 0.22), box(0.04, 0.04, 0.3, c, 0, 0.36, -0.28).rotateX(-0.8));
+      for (const sx of [-1, 1]) inner.add(cone(0.035, 0.07, c, sx * 0.05, 0.4, 0.22, 4));
+      legs([[-0.05, 0.12], [0.05, 0.12], [-0.05, -0.12], [0.05, -0.12]], 0.15, 0.04, 0xc08a40);
+      a.height = 0.45;
     } else if (kind === 'rabbit') {
       inner.add(box(0.18, 0.16, 0.26, 0x9a8a78, 0, 0.12, 0), box(0.13, 0.13, 0.13, 0x9a8a78, 0, 0.22, 0.13), box(0.04, 0.16, 0.04, 0x9a8a78, -0.03, 0.34, 0.12), box(0.04, 0.16, 0.04, 0x9a8a78, 0.03, 0.34, 0.12), box(0.07, 0.07, 0.04, 0xf6f6f6, 0, 0.14, -0.14));
       a.hop = true;
@@ -1753,6 +1780,7 @@ const Render3D = (() => {
   }
   const BIOME_GRASS = { [BIOME.MEADOW]: 0x6aa83a, [BIOME.FOREST]: 0x4a8a30, [BIOME.BADLANDS]: 0xb0a058, [BIOME.HIGHLANDS]: 0x7a9a6a,
     [BIOME.MARSH]: 0x5a7a3a, [BIOME.DESERT]: 0xb8a868, [BIOME.TAIGA]: 0x7a9a82, [BIOME.ISLES]: 0x6ab040 };
+  const SEASON_GRASS = [0x7ab83a, null, 0xa8a048, 0x9aa890];
   const FLOWER_COLORS = [0xf04a5a, 0xf0d040, 0xffffff, 0xb070f0, 0x5a9af0, 0xff9a3a];
   function streamClutter() {
     clutterX = Math.round(player.vx); clutterY = Math.round(player.vz);
@@ -1785,7 +1813,8 @@ const Render3D = (() => {
       const grassP = ({ [BIOME.MEADOW]: 0.95, [BIOME.FOREST]: 0.75, [BIOME.HIGHLANDS]: 0.6, [BIOME.BADLANDS]: 0.35, [BIOME.MARSH]: 0.9, [BIOME.DESERT]: 0.12, [BIOME.TAIGA]: 0.4, [BIOME.ISLES]: 0.85 }[b] || 0) * dens * (hasNode ? 0.5 : 1);
       const tufts = r1 < grassP ? (r2 < 0.5 ? 2 : 1) : 0;
       const snowy = b !== BIOME.TAIGA && snowyAt(x, y);
-      for (let k = 0; k < tufts; k++) { const px = jx(), pz = jz(); put('tuft', px, pz, gh(px, pz), Math.random() * 6, 0.5 + Math.random() * 0.4, snowy ? 0xb8c8c0 : tileH[i] > 1.6 ? 0x8a9a6a : BIOME_GRASS[b]); }
+      const grassC = snowy ? 0xb8c8c0 : tileH[i] > 1.6 ? 0x8a9a6a : SEASON_GRASS[seasonIdx()] && b !== BIOME.DESERT && b !== BIOME.BADLANDS ? SEASON_GRASS[seasonIdx()] : BIOME_GRASS[b];
+      for (let k = 0; k < tufts; k++) { const px = jx(), pz = jz(); put('tuft', px, pz, gh(px, pz), Math.random() * 6, 0.5 + Math.random() * 0.4, grassC); }
       if (hasNode) continue;
       if (snowy) { if (r3 < 0.5 * dens) { const px = jx(), pz = jz(); put('snow', px, pz, gh(px, pz) - 0.02, r1 * 6, 0.8 + r2, 0xf2f8fc); } continue; }
       // After the thaw, spring flowers everywhere.
@@ -1994,7 +2023,7 @@ const Render3D = (() => {
       c.userData.mat.color.setHex(0xffffff).lerp(cB.setHex(0x6a7280), gloom).multiplyScalar(0.35 + 0.65 * day);
     }
     rain.visible = rainAmt > 0.02 && underAmt < 0.5;
-    const snowing = snowyAt(camPos.x, camPos.z) || biome[idx(Math.round(camPos.x), Math.round(camPos.z))] === BIOME.TAIGA;
+    const snowing = snowyAt(camPos.x, camPos.z) || seasonIdx() === 3 || biome[idx(Math.round(camPos.x), Math.round(camPos.z))] === BIOME.TAIGA;
     waterMesh.visible = underAmt < 0.5;
     if (rain.visible) {
       const arr = rain.geometry.attributes.position.array, drops = rain.userData.drops;
@@ -2010,6 +2039,31 @@ const Render3D = (() => {
       rain.material.opacity = (snowing ? 0.9 : 0.45) * rainAmt;
     }
     return gloom;
+  }
+
+  // ------------------------------------------------------------ your pet follows you around
+  let petObj = null, shownSeason = -1;
+  function updatePet(dt, t) {
+    const kind = petKind();
+    if (!kind) { if (petObj) { scene.remove(petObj.a.g); petObj = null; } return; }
+    if (!petObj || petObj.kind !== kind) {
+      if (petObj) scene.remove(petObj.a.g);
+      const a = kind === 'wolf' ? wolf() : animal(kind);
+      if (kind === 'wolf') a.inner.scale.setScalar(0.75);
+      petObj = { kind, a, x: state.px - 1, z: state.py - 1 };
+      scene.add(a.g);
+    }
+    const p = petObj, a = p.a;
+    // Trail a little behind and to the side, and catch up if you get away.
+    const tx = state.px - Math.sin(state.face) * 1.3 + Math.cos(state.face) * 0.6, tz = state.py - Math.cos(state.face) * 1.3 - Math.sin(state.face) * 0.6;
+    const dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
+    if (d > 12) { p.x = tx; p.z = tz; }
+    const mov = d > 0.4;
+    if (mov) { const sp = Math.min(d, (d > 3 ? 9 : 4.5) * dt); p.x += dx / d * sp; p.z += dz / d * sp; a.rot = lerpAngle(a.rot || 0, Math.atan2(dx, dz), Math.min(1, dt * 8)); }
+    a.g.position.set(p.x, Math.max(gh(p.x, p.z), state.sailing ? 0.1 : -9), p.z);
+    a.g.visible = !state.sailing;
+    a.g.rotation.y = a.rot || 0;
+    animateLimbs(a, mov, false, dt, t, 14);
   }
 
   // ------------------------------------------------------------ caravans on the road, and the people of your town
@@ -2491,6 +2545,52 @@ const Render3D = (() => {
     floater(x, y, text, { color: cls === 'level' ? '#8fe8ff' : '#ffffff', size: 36, h: cls === 'level' ? 0.42 : 0.3, dur: cls === 'level' ? 2 : 1.2 }, 1.9);
   };
   FX.lunge = m => { const a = monObjs.get(m.id); if (a) a.lunge = 1; };
+  // A ring that bursts out from you for a special attack.
+  const bursts = [];
+  FX.special = (name, radius) => {
+    const ring = new C.Mesh(new C.RingGeometry(0.8, 1, 32).rotateX(-Math.PI / 2),
+      new C.MeshBasicMaterial({ color: name === 'Frost Nova' ? 0x9adfff : 0xffd27a, transparent: true, opacity: 0.9, depthWrite: false, side: C.DoubleSide }));
+    ring.position.set(state.px, playerY() + 0.15, state.py);
+    scene.add(ring);
+    bursts.push({ m: ring, life: 0, r: radius });
+    floater(state.px, state.py, name, { color: name === 'Frost Nova' ? '#bfe8ff' : '#ffe9a8', size: 40, h: 0.42, dur: 1.4 }, 2.3);
+  };
+  FX.telegraph = (m, kind) => {
+    const a = monObjs.get(m.id);
+    if (!a) return;
+    const ring = new C.Mesh(new C.RingGeometry(0.8, 1, 32).rotateX(-Math.PI / 2), new C.MeshBasicMaterial({ color: kind === 'breath' ? 0xbfe8ff : 0xffa060, transparent: true, opacity: 0.8, depthWrite: false }));
+    ring.position.set(m.x, gh(m.x, m.y) + 0.15, m.y);
+    scene.add(ring);
+    bursts.push({ m: ring, life: 0, r: m.tele ? m.tele.r : 2.5 });
+  };
+  function updateBursts(dt) {
+    for (let k = bursts.length - 1; k >= 0; k--) {
+      const b = bursts[k];
+      b.life += dt;
+      const f = b.life / 0.45;
+      b.m.scale.setScalar(0.3 + f * b.r);
+      b.m.material.opacity = 0.9 * (1 - f);
+      if (f >= 1) { scene.remove(b.m); b.m.geometry.dispose(); b.m.material.dispose(); bursts.splice(k, 1); }
+    }
+  }
+  // Red ground markers that fill in as a monster winds up a big attack.
+  function updateTelegraph(a, m) {
+    const tl = m.tele;
+    if (!tl || tl.kind === 'summon') { if (a.tele) { scene.remove(a.tele); a.tele = null; } return; }
+    if (!a.tele || a.teleKey !== tl.start) {
+      if (a.tele) scene.remove(a.tele);
+      const geo2 = tl.kind === 'breath' ? new C.CircleGeometry(tl.r, 24, Math.PI / 2 - tl.arc, tl.arc * 2) : new C.CircleGeometry(tl.r, 32);
+      geo2.rotateX(-Math.PI / 2);
+      a.tele = new C.Mesh(geo2, new C.MeshBasicMaterial({ color: 0xff2a1a, transparent: true, opacity: 0.3, depthWrite: false }));
+      a.tele.renderOrder = 4;
+      a.tele.position.set(tl.x, gh(tl.x, tl.y) + 0.08, tl.y);
+      a.tele.rotation.y = Math.PI + tl.dir;
+      a.teleKey = tl.start;
+      scene.add(a.tele);
+    }
+    const f = clamp((Date.now() - tl.start) / (tl.end - tl.start), 0, 1);
+    a.tele.material.opacity = 0.15 + 0.45 * f + Math.sin(f * 30) * 0.05;
+  }
 
   function marker(color, opacity, size = 0.5) {
     const g = new C.RingGeometry(size * 0.75, size, 24);
@@ -2637,6 +2737,7 @@ const Render3D = (() => {
     } else setPlayerTool(state.equip.weapon ? (state.equip.weapon === 'wooden_club' ? 'club' : 'sword') : null, state.equip.weapon ? ITEMS[state.equip.weapon].tier : 0);
     const afloat = !!state.sailing;
     player.boat.visible = afloat;
+    player.horse.g.visible = !!state.mounted;
     player.g.position.set(player.vx, playerY() + (afloat ? Math.sin(t * 1.7) * 0.04 : 0), player.vz);
     player.g.rotation.y = player.rot;
     if (afloat) {
@@ -2646,13 +2747,26 @@ const Render3D = (() => {
       animateLimbs(player, false, acting, dt, t);
       player.inner.position.y = 0.22;
       if (moving && Math.random() < dt * 0.8) Sound.sfx('splash');
+    } else if (state.mounted) {
+      // In the saddle: the horse walks, you sit.
+      player.g.rotation.z = 0;
+      animateLimbs(player.horse, moving, false, dt, t, keys.has('shift') ? 16 : 11);
+      animateLimbs(player, false, false, dt, t);
+      player.inner.position.y = 0.95 + player.horse.inner.position.y;
+      player.legL.rotation.x = player.legR.rotation.x = -1.2;
+      player.legL.rotation.z = -0.35; player.legR.rotation.z = 0.35;
     } else {
       player.g.rotation.z = 0;
-      animateLimbs(player, moving, acting && !moving, dt, t, keys.has('shift') ? 17 : 13);
+      player.legL.rotation.z = player.legR.rotation.z = 0;
+      animateLimbs(player, moving, acting && !moving && !combat.blocking, dt, t, keys.has('shift') ? 17 : 13);
+      if (combat.blocking) { player.armL.rotation.x = -1.5; player.armR.rotation.x = -0.9; }
     }
+    // A forward roll while dodging.
+    player.inner.rotation.x = combat.dodgeLeft > 0 ? (1 - combat.dodgeLeft / DODGE.time) * Math.PI * 2 : 0;
+    if (combat.dodgeLeft > 0) player.inner.position.y = 0.3;
     // Footsteps, softer on grass than on stone.
     const ph = Math.floor(player.walk / Math.PI);
-    if (moving && !afloat && ph !== stepPhase) {
+    if (moving && !afloat && ph !== stepPhase && (!state.mounted || ph % 2)) {
       const tt = terrain[idx(Math.round(state.px), Math.round(state.py))];
       Sound.sfx(tt === T.FLOOR || tt === T.ROAD || tt === T.BRIDGE || tt === T.PEAK ? 'stepstone' : 'step');
     }
@@ -2674,9 +2788,13 @@ const Render3D = (() => {
       const def = MONSTERS[m.type];
       setBar(a.bar, m.hp / def.hp, m.hp < def.hp);
       a.alert.visible = m.aggro;
+      // Stunned monsters sway; winding-up monsters show where the blow will land.
+      a.inner.rotation.z = m.stunUntil > Date.now() ? Math.sin(t * 10) * 0.18 : 0;
+      updateTelegraph(a, m);
     }
     for (const [id, a] of monObjs) {
       if (live.has(id)) continue;
+      if (a.tele) { scene.remove(a.tele); a.tele = null; }
       scene.remove(a.g);
       pickables.splice(pickables.indexOf(a.g), 1);
       a.g.traverse(o => { if (o.isSprite) disposeSprite(o); });
@@ -2715,6 +2833,9 @@ const Render3D = (() => {
       po.g.traverse(o => { if (o.userData.spin) { o.rotation.y = t; o.position.y = 1.2 + Math.sin(t * 2) * 0.08; } });
     }
     updateCritters(dt, t);
+    updateBursts(dt);
+    updatePet(dt, t);
+    if (seasonIdx() !== shownSeason) { shownSeason = seasonIdx(); streamX = streamY = -999; clutterX = -999; }
     updateCaravans(dt, t);
     updateMyTown(dt, t);
     updateFish(dt, now);

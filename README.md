@@ -18,6 +18,10 @@ GitHub Pages or by opening `index.html` in a browser. It's made for keyboard and
 | Drag the mouse | Swing the camera around you |
 | Mouse wheel | Zoom |
 | E or click | Use what's in front of you: gather, attack, trade, talk, build, launch or beach your boat |
+| Space | Dodge roll (you can't be hit mid-roll) |
+| Q (hold) | Block: much stronger with a shield |
+| R | Weapon special: Shove, Whirlwind or Frost Nova |
+| Z | Ride your horse |
 | F | Eat food |
 | X | Cycle combat style (Attack / Strength / Defence) |
 | B | Build menu |
@@ -26,6 +30,7 @@ GitHub Pages or by opening `index.html` in a browser. It's made for keyboard and
 | K | Skills |
 | G | Empire overview |
 | J | Quest log and journal |
+| O | Achievements and bestiary |
 | M | World map |
 | H | Help |
 | Esc | Close a panel, cancel placing a building, or open settings |
@@ -94,6 +99,21 @@ them, so hire caravan guards, or deal with the Bandit King.
 town. It appears on the map with its own market and carriage stop, settlers stroll its streets, and your
 townsfolk pay taxes. Walls and gates, from wooden palisades up to stone, help your guards fight off raids.
 
+**Combat.** Fights use stamina (the gold bar under your health). Roll out of the way of attacks, hold
+Q to block (a shield blocks most of a hit), and use your weapon's special: a Shove that stuns, a
+sword Whirlwind that hits everything around you, or Frostbane's Frost Nova that freezes. Big
+monsters and bosses wind up special attacks, marked by red shapes on the ground: ogre and troll
+slams, the Frost Drake's and Frost Wurm's breath, the Crypt Lord's death nova and summoned
+skeletons, and the Bandit King's whirling blades. Roll out of the red, or block and take less.
+
+**Seasons, horses and pets.** Every three days the season turns: spring blossom, summer sun, autumn
+leaves and rain, winter frost and snow (when food prices rise). Buy a horse in Ironhold or
+Frosthollow and press Z to ride. A hound bites at whatever you fight, a cat finds you coins, and a
+rare wolf pup (dropped by wolves) fights fiercest of all. Click a pet in your pack to bring it along.
+
+**Achievements and bestiary.** Press O for 29 achievements, and a bestiary that fills in with each
+monster you meet: where it lives, what it drops, and which special attacks to watch for.
+
 **Sailing.** Craft a sailboat (Crafting 18) or buy one in Saltmere. Face open water and press **E** to
 launch it. Boats are fast, can reach fishing spots far from shore, and keep you safe from monsters.
 
@@ -140,6 +160,8 @@ then visit http://localhost:8000.
 - `js/icons.js`: item icons drawn on canvas, and the interface's SVG icons
 - `js/story.js`: the Long Winter story and the Bandit King side quest: quests, dialogue and world changes
 - `js/caravans.js`: trade caravans and founding your own town
+- `js/combat.js`: stamina, dodging, blocking, weapon specials and monster special attacks
+- `js/extras.js`: seasons, horses, pets, achievements and the bestiary
 - `js/game.js`: game logic: movement, gathering, crafting, building, combat, markets, workers, raids, saving and UI panels
 - `js/render3d.js`: the 3D world: terrain, water, sky, weather, day/night, trees, grass, wildlife, towns, buildings, characters, effects and the orbit camera
 - `js/lib/three.min.js`: three.js r149 (MIT licence, see `js/lib/THREE-LICENSE`)

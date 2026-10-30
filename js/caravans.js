@@ -137,6 +137,7 @@ function simCaravans(dt, report) {
         const n = Math.min(c.load[id], Math.max(0, storeCap() - storeUsed()));
         if (n > 0) { addStore(id, n); got.push(`${n} ${itemName(id).toLowerCase()}`); if (report) report.produced[id] = (report.produced[id] || 0) + n; }
       }
+      state.stats.caravans = (state.stats.caravans || 0) + 1;
       logOrReport(report, `Your caravan is back from ${town}${got.length ? ` with ${got.join(' and ')}` : ', empty-handed'}.`, got.length ? 'gold' : 'dim');
       c.load = {}; c.gold = 0;
       c.phase = 'idle'; c.t = 0; c.wait = 0;

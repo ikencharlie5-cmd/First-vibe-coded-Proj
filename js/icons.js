@@ -175,6 +175,17 @@ const Icons = (() => {
       poly(g, [[32, 10], [48, 26], [44, 48], [32, 56], [20, 48], [16, 26]], '#ff7a2a');
       poly(g, [[32, 18], [40, 28], [32, 46], [24, 28]], '#ffd27a');
     },
+    horse(g) {
+      poly(g, [[12, 30], [40, 26], [46, 14], [56, 18], [52, 28], [48, 30], [48, 44], [44, 44], [42, 34], [20, 36], [18, 50], [14, 50], [14, 36], [8, 40]], '#8a5a32');
+      poly(g, [[44, 14], [40, 26], [36, 22], [42, 10]], '#3a2410');
+    },
+    animal(g, body, ear) {
+      ellipse(g, 30, 38, 18, 11, body);
+      ellipse(g, 46, 26, 9, 8, body);
+      poly(g, [[42, 20], [44, 10], [48, 19]], ear); poly(g, [[49, 19], [53, 10], [54, 21]], ear);
+      g.beginPath(); g.arc(49, 25, 1.8, 0, Math.PI * 2); g.fillStyle = '#111'; g.fill();
+      for (const x of [18, 26, 34, 40]) { g.fillStyle = body; g.fillRect(x, 44, 4, 10); }
+    },
     crown(g) {
       poly(g, [[10, 48], [10, 20], [20, 32], [32, 14], [44, 32], [54, 20], [54, 48]], '#e8c547');
       for (const [x, c] of [[20, '#c0392b'], [32, '#5a8ad8'], [44, '#5ad86a']]) ellipse(g, x, 40, 4, 4, c);
@@ -225,6 +236,10 @@ const Icons = (() => {
     else if (id === 'ancient_coin') draw.coin(g, '#8aa08a', '#4a5a4a');
     else if (id === 'crypt_crown') draw.crown(g);
     else if (id === 'sailboat') draw.boat(g);
+    else if (id === 'horse') draw.horse(g);
+    else if (id === 'pet_dog') draw.animal(g, '#8a5a32', '#5a3a20');
+    else if (id === 'pet_cat') draw.animal(g, '#e0a050', '#c07a30');
+    else if (id === 'wolf_pup') draw.animal(g, '#9a9aa2', '#6a6a72');
     else if (id === 'sun_sigil') draw.sun(g);
     else if (id === 'ember_core') draw.ember(g);
     else if (id === 'star_shard') draw.star(g, '#c8e8ff');
@@ -264,6 +279,7 @@ const Icons = (() => {
     gear: '<circle cx="12" cy="12" r="3.2" fill="none" stroke="#d8d0b8" stroke-width="2"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8" stroke="#d8d0b8" stroke-width="2.6" stroke-linecap="round"/>',
     house: '<path d="M3 11l9-7 9 7" fill="#9a3a2a" stroke="#3a1a10" stroke-width="1.6"/><path d="M5 10v10h14V10" fill="#e0d0a8" stroke="#3a1a10" stroke-width="1.6"/><path d="M10 20v-5h4v5" fill="#5a3a20"/>',
     wheel: '<circle cx="12" cy="12" r="8" fill="none" stroke="#7a5232" stroke-width="2.4"/><circle cx="12" cy="12" r="2" fill="#7a5232"/><path d="M12 4v16M4 12h16M6.3 6.3l11.4 11.4M17.7 6.3L6.3 17.7" stroke="#7a5232" stroke-width="1.3"/>',
+    trophy: '<path d="M7 4h10v4a5 5 0 01-10 0z" fill="#e8c547" stroke="#7a5a10" stroke-width="1.5"/><path d="M7 6H4a3 3 0 003 4M17 6h3a3 3 0 01-3 4" stroke="#7a5a10" stroke-width="1.5" fill="none"/><path d="M10 13h4v4h-4zM8 20h8v-3H8z" fill="#c9a24a" stroke="#7a5a10" stroke-width="1.2"/>',
     scroll: '<path d="M6 4h11a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6" fill="#e8d8a8" stroke="#5a4020" stroke-width="1.5"/><path d="M8 9h8M8 12h8M8 15h5" stroke="#5a4020" stroke-width="1.2"/>',
   };
   const SKILL_ICON = {
