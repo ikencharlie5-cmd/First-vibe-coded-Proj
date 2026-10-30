@@ -8,7 +8,7 @@
 </head>
 <body>
   <header>
-    <h1>IRONHOLD <span class="dim">an ASCII refinement empire</span></h1>
+    <h1>IRONHOLD <span class="dim">a medieval refinement empire</span></h1>
     <div class="hdr-btns">
       <button id="btn-empire">Empire (E)</button>
       <button id="btn-help">Help (?)</button>
@@ -18,16 +18,21 @@
   </header>
   <main>
     <section id="left">
-      <pre id="map" aria-label="Game map"></pre>
+      <div id="view" aria-label="Game world">
+        <div class="zoom">
+          <button id="zoom-in" aria-label="Zoom in">+</button>
+          <button id="zoom-out" aria-label="Zoom out">&minus;</button>
+        </div>
+        <div id="dpad">
+          <button data-dir="0,-1" class="up">&#9650;</button>
+          <button data-dir="-1,0" class="left">&#9664;</button>
+          <button data-dir="1,0" class="right">&#9654;</button>
+          <button data-dir="0,1" class="down">&#9660;</button>
+        </div>
+        <button id="btn-eat">Eat</button>
+      </div>
       <div id="status"></div>
       <div id="log"></div>
-      <div id="dpad">
-        <button data-dir="0,-1" class="up">&#9650;</button>
-        <button data-dir="-1,0" class="left">&#9664;</button>
-        <button id="btn-eat" class="mid">Eat</button>
-        <button data-dir="1,0" class="right">&#9654;</button>
-        <button data-dir="0,1" class="down">&#9660;</button>
-      </div>
     </section>
     <aside id="side">
       <div class="stat">Gold: <b id="gold" class="gold">0</b></div>
@@ -50,7 +55,9 @@
       <div id="modal-body"></div>
     </div>
   </div>
+  <script src="js/lib/three.min.js"></script>
   <script src="js/data.js"></script>
   <script src="js/game.js"></script>
+  <script src="js/render3d.js"></script>
 </body>
 </html>

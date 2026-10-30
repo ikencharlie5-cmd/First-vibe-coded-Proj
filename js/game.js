@@ -1,10 +1,9 @@
-// Ironhold: an ASCII refinement empire. Engine, world, UI.
+// Ironhold: a medieval refinement empire. Engine, world, UI. Drawing lives in render3d.js.
 'use strict';
 
 const SAVE_KEY = 'ironhold-save-v1';
 const W = 160, H = 100;
 const TOWN = { x: 80, y: 50, x0: 68, x1: 92, y0: 43, y1: 57 };
-let VW = 61, VH = 27;
 const TICK = 100;
 const WORLD_SEED = 1337;
 
@@ -49,8 +48,8 @@ const terrain = new Uint8Array(W * H);
 const deco = new Uint8Array(W * H);
 const nodes = new Map();    // idx -> { res, until }
 const stations = new Map(); // idx -> station id
-const sites = new Map();    // idx -> camp id
-const sitePos = {};         // camp id -> {x,y}
+const sites = new Map();    // idx -> camp or works id
+const sitePos = {};         // camp/works id -> {x,y}
 
 function pickWeighted(r, list) {
   let roll = r(), acc = 0;
@@ -138,6 +137,11 @@ function generateWorld() {
   site(58, 48, 'lumber');
   site(103, 48, 'mine');
   site(83, 65, 'fishery');
+  // Building plots for the town works.
+  site(72, 53, 'sawmill');
+  site(88, 48, 'smelter');
+  site(84, 55, 'smokehouse');
+  site(88, 52, 'armoury');
 }
 
 function walkableTerrain(x, y) {
@@ -145,6 +149,9 @@ function walkableTerrain(x, y) {
   return WALKABLE.has(terrain[idx(x, y)]);
 }
 function nodeActive(n, now) { return n && n.until <= now; }
+
+// Visual effect hooks; the 3D renderer replaces these.
+const FX = { damage() {}, gain() {}, lunge() {} };
 
 // ---------------------------------------------------------------- state
 let state = null;
@@ -162,6 +169,7 @@ let lastRegen = 0;
 let lastSpawn = 0;
 let lastSave = 0;
 let lastTick = 0;
+let walkTarget = null;     // { x, y, monsterId? } for click-to-move
 
 function newState() {
   const xp = {};
@@ -224,6 +232,7 @@ function addXp(skill, amount) {
   const after = lvl(skill);
   if (after > before) {
     log(`Level up! ${skillName(skill)} is now level ${after}.`, 'level');
+    FX.gain(state.x, state.y, `${skillName(skill)} ${after}!`, 'level');
     if (skill === 'hitpoints') state.hp += after - before;
   }
   uiDirty = true;
@@ -406,6 +415,7 @@ function playerAttack(m) {
   const dmg = hit ? randInt(1, maxHit) : 0;
   m.aggro = true;
   m.flash = Date.now() + 250;
+  FX.damage(m.x, m.y, dmg);
   if (dmg > 0) {
     m.hp -= dmg;
     addXp(state.style, dmg * 4);
@@ -419,6 +429,8 @@ function monsterAttack(m) {
   const defL = lvl('defence') + (state.style === 'defence' ? 3 : 0);
   const hit = Math.random() < hitChance((def.atk + 8) * 64, (defL + 8) * (64 + eq.def));
   const dmg = hit ? randInt(1, def.maxHit) : 0;
+  FX.lunge(m);
+  FX.damage(state.x, state.y, dmg, true);
   if (dmg > 0) {
     state.hp -= dmg;
     playerFlash = Date.now() + 250;
@@ -448,13 +460,15 @@ function die(killer) {
   state.hp = maxHp();
   state.x = TOWN.x; state.y = TOWN.y;
   action = null;
+  walkTarget = null;
   for (const m of monsters) m.aggro = false;
   log(`You were slain by a ${killer.name.toLowerCase()}! You wake in town, ${lost} gold lighter.`, 'bad');
 }
 
 // ---------------------------------------------------------------- player actions
-function tryMove(dx, dy) {
+function tryMove(dx, dy, auto) {
   const now = Date.now();
+  if (!auto) walkTarget = null;
   if (now - lastMove < 110) return;
   lastMove = now;
   const tx = state.x + dx, ty = state.y + dy;
@@ -469,6 +483,60 @@ function tryMove(dx, dy) {
   state.x = tx; state.y = ty;
   if (action) { action = null; }
   uiDirty = true;
+}
+
+// Click-to-move: walk to a tile, or next to it if it's something to interact with.
+function clickTile(x, y) {
+  if (modal || x < 0 || y < 0 || x >= W || y >= H) return;
+  if (x === state.x && y === state.y) return;
+  const m = monsterAt(x, y);
+  walkTarget = m ? { x, y, monsterId: m.id } : { x, y };
+}
+
+function walkStep() {
+  const t = walkTarget;
+  if (t.monsterId) {
+    const m = monsters.find(mm => mm.id === t.monsterId && mm.hp > 0);
+    if (!m) { walkTarget = null; return; }
+    t.x = m.x; t.y = m.y;
+  }
+  const dist = Math.abs(t.x - state.x) + Math.abs(t.y - state.y);
+  if (dist === 0) { walkTarget = null; return; }
+  const occupied = new Set(monsters.filter(m => m.hp > 0).map(m => idx(m.x, m.y)));
+  const targetFree = !blocked(t.x, t.y);
+  if (dist === 1 && !targetFree) {
+    walkTarget = null;
+    tryMove(t.x - state.x, t.y - state.y, true);
+    return;
+  }
+  const step = firstStep(t.x, t.y, targetFree, occupied);
+  if (!step) { walkTarget = null; log("You can't find a way there.", 'dim'); return; }
+  tryMove(step[0], step[1], true);
+}
+
+// Breadth-first search; returns the first [dx, dy] toward the goal.
+function firstStep(tx, ty, toTile, occupied) {
+  const now = Date.now();
+  const start = idx(state.x, state.y);
+  const prev = new Map([[start, -1]]);
+  const q = [start];
+  const goal = (x, y) => (toTile ? x === tx && y === ty : Math.abs(x - tx) + Math.abs(y - ty) === 1);
+  for (let head = 0; head < q.length && prev.size < 15000; head++) {
+    const c = q[head], cx = c % W, cy = (c - cx) / W;
+    if (c !== start && goal(cx, cy)) {
+      let n = c;
+      while (prev.get(n) !== start) n = prev.get(n);
+      return [n % W - state.x, Math.floor(n / W) - state.y];
+    }
+    for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = cx + a, ny = cy + b, ni = idx(nx, ny);
+      if (prev.has(ni) || !walkableTerrain(nx, ny) || occupied.has(ni)) continue;
+      if (nodeActive(nodes.get(ni), now) || stations.has(ni) || sites.has(ni)) continue;
+      prev.set(ni, c);
+      q.push(ni);
+    }
+  }
+  return null;
 }
 
 function startCombat(m) {
@@ -498,6 +566,7 @@ function processGather(now) {
   const chance = clamp(0.3 + (lvl(r.skill) - r.level) * 0.025 + ITEMS[tool].tier * 0.07, 0.05, 0.95);
   if (Math.random() < chance) {
     addItem(r.item);
+    FX.gain(state.x, state.y, `+1 ${itemName(r.item)}`);
     addXp(r.skill, r.xp);
     log(`You get some ${itemName(r.item).toLowerCase()}.`);
     if (Math.random() < r.deplete) {
@@ -807,6 +876,7 @@ function update() {
   const dt = lastTick ? (now - lastTick) / 1000 : 0;
   lastTick = now;
 
+  if (walkTarget && now - lastMove >= 150 && !modal) walkStep();
   if (action && now >= action.next) {
     if (action.type === 'gather') processGather(now);
     else if (action.type === 'combat') processCombat(now);
@@ -833,73 +903,12 @@ function update() {
   }
   if (now - lastSave > 15000) save();
 
-  renderMap();
+  $('status').textContent = statusText(now);
   if (uiDirty) { renderUI(); uiDirty = false; }
 }
 
 // ---------------------------------------------------------------- rendering
 const $ = id => document.getElementById(id);
-
-const TERRAIN_DRAW = {
-  [T.GRASS]: i => (deco[i] < 2 ? [',', 'grass2'] : deco[i] === 9 ? ['"', 'grass3'] : ['.', 'grass']),
-  [T.WATER]: i => ['~', deco[i] % 2 ? 'water' : 'water2'],
-  [T.WALL]: () => ['#', 'wall'],
-  [T.FLOOR]: () => ['.', 'floor'],
-  [T.ROAD]: () => ['=', 'road'],
-  [T.MOUNTAIN]: () => ['^', 'mountain'],
-  [T.BRIDGE]: () => ['=', 'bridge'],
-};
-
-function cellAt(x, y, now, mIndex) {
-  if (x === state.x && y === state.y) return ['@', now < playerFlash ? 'player hurt' : 'player'];
-  const i = idx(x, y);
-  const m = mIndex.get(i);
-  if (m) {
-    const d = MONSTERS[m.type];
-    return [d.ch, `mon ${d.cls}${m.aggro ? ' aggro' : ''}${now < (m.flash || 0) ? ' hurt' : ''}`];
-  }
-  if (stations.has(i)) return [STATIONS[stations.get(i)].ch, 'station'];
-  if (sites.has(i)) {
-    const id = sites.get(i);
-    return [CAMPS[id].site, state.empire.camps[id].built ? 'site built' : 'site'];
-  }
-  const n = nodes.get(i);
-  if (n) {
-    const r = RESOURCES[n.res];
-    if (nodeActive(n, now)) return [r.ch, r.cls];
-    if (r.skill === 'woodcutting') return [';', 'stump'];
-    if (r.skill === 'mining') return ['_', 'spent'];
-  }
-  return TERRAIN_DRAW[terrain[i]](i);
-}
-
-function camera() {
-  return {
-    x: clamp(state.x - Math.floor(VW / 2), 0, W - VW),
-    y: clamp(state.y - Math.floor(VH / 2), 0, H - VH),
-  };
-}
-
-function renderMap() {
-  const now = Date.now(), cam = camera();
-  const mIndex = new Map();
-  for (const m of monsters) if (m.hp > 0) mIndex.set(idx(m.x, m.y), m);
-  let html = '';
-  for (let vy = 0; vy < VH; vy++) {
-    let cur = null, buf = '';
-    for (let vx = 0; vx < VW; vx++) {
-      const [ch, cls] = cellAt(cam.x + vx, cam.y + vy, now, mIndex);
-      if (cls !== cur) {
-        if (buf) html += `<span class="${cur}">${esc(buf)}</span>`;
-        cur = cls; buf = '';
-      }
-      buf += ch;
-    }
-    html += `<span class="${cur}">${esc(buf)}</span>\n`;
-  }
-  $('map').innerHTML = html;
-  $('status').textContent = statusText(now);
-}
 
 function statusText(now) {
   let zone = inTown(state.x, state.y) ? 'Town of Ironhold' : (() => {
@@ -922,7 +931,10 @@ function describe(x, y) {
   const m = monsterAt(x, y);
   if (m) { const d = MONSTERS[m.type]; return `${d.name} (lvl ${d.level}) ${Math.max(0, m.hp)}/${d.hp} HP`; }
   if (stations.has(i)) { const s = STATIONS[stations.get(i)]; return `${s.name}: ${s.desc}`; }
-  if (sites.has(i)) { const c = CAMPS[sites.get(i)]; return `${c.name} site`; }
+  if (sites.has(i)) {
+    const id = sites.get(i), b = CAMPS[id] ? state.empire.camps[id] : state.empire.works[id];
+    return `${(CAMPS[id] || WORKS[id]).name}${b.built ? ` (level ${b.level})` : ': empty plot, build it at the Guild Hall'}`;
+  }
   const n = nodes.get(i);
   if (n) {
     const r = RESOURCES[n.res];
@@ -1079,7 +1091,7 @@ function empireHtml() {
     <button data-collectall="1">Collect from all camps</button><h3>Camps (wilds)</h3>`;
   for (const id in CAMPS) {
     const c = E.camps[id], def = CAMPS[id];
-    html += `<div class="card" id="b-${id}"><div class="cardhead"><b>${def.name}</b> <span class="dim">[${def.site} on map]</span>${c.built ? ` <span>Lvl ${c.level}</span>` : ''}</div>`;
+    html += `<div class="card" id="b-${id}"><div class="cardhead"><b>${def.name}</b>${c.built ? ` <span>Lvl ${c.level}</span>` : ''}</div>`;
     if (!c.built) {
       html += `<div class="small">Gathers ${skillName(def.skill).toLowerCase()} resources. Cost: ${costText(def.cost)}</div>
         <button data-emp="build" data-id="${id}" ${hasAll(def.cost) ? '' : 'disabled'}>Build</button></div>`;
@@ -1127,21 +1139,24 @@ function helpHtml() {
   return `<h2>Ironhold</h2>
   <p>You are one peasant with a worn axe and big dreams. Gather, refine, sell, hire, and grow a medieval industrial empire.</p>
   <h3>Controls</h3>
-  <p><b>Arrows / WASD</b> move. <b>Walk into</b> trees, rocks, fishing spots, stations or monsters to interact.
-  Gathering repeats automatically until you move. <b>F</b> eat food | <b>C</b> cycle combat style | <b>E</b> empire panel |
-  <b>?</b> help | <b>Esc</b> close. Hover the map to inspect tiles.</p>
-  <h3>Legend</h3>
-  <pre class="legend"><span class="player">@</span> you          <span class="station">$</span> market   <span class="station">H</span> guild hall
-<span class="pine">t</span> pine  <span class="oak">T</span> oak  <span class="ironwood">Y</span> ironwood   <span class="station">S</span> sawbench <span class="station">F</span> furnace
-<span class="copper">*</span> copper <span class="iron">*</span> iron <span class="coal">*</span> coal     <span class="station">A</span> anvil    <span class="station">R</span> cook fire
-<span class="fish1">%</span> minnow <span class="fish2">%</span> trout <span class="fish3">%</span> pike  <span class="site">L M P</span> camp sites
-<span class="goblin">g</span> goblin <span class="wolf">w</span> wolf <span class="bandit">b</span> bandit <span class="ogre">O</span> ogre</pre>
+  <p><b>Click or tap</b> anywhere to walk there. Click a tree, rock, fishing spot, building or monster to walk over and use it.
+  <b>Arrows / WASD</b> also move, and walking into things uses them. Gathering repeats until you move.</p>
+  <p><b>F</b> eat food | <b>C</b> cycle combat style | <b>E</b> empire panel | <b>?</b> help | <b>Esc</b> close |
+  <b>Mouse wheel</b> or <b>+ / -</b> zoom. Hover over things to see what they are.</p>
+  <h3>What you'll see</h3>
+  <ul>
+    <li><b>Trees:</b> pines near town, round oaks further out, tall teal ironwoods in the deep wilds.</li>
+    <li><b>Rocks:</b> the coloured nuggets show the ore: orange copper, pale iron, black coal.</li>
+    <li><b>Fishing spots:</b> rippling rings on the water. Bluer rings are better fish.</li>
+    <li><b>Town:</b> Market stall, Guild Hall, Furnace, Anvil, Sawbench and Cook fire, all labelled.</li>
+    <li><b>Monsters:</b> small green goblins, grey wolves, red-hooded bandits, and huge purple ogres. A red <b>!</b> means it's hunting you.</li>
+  </ul>
   <h3>Getting started</h3>
   <ol>
-    <li>Leave town west to the pine grove and chop logs. East of town is copper. South is a fishing pond.</li>
-    <li>Saw logs into planks (S), smelt ore into bars (F), smith bars into gear (A), and cook fish (R).</li>
-    <li>Sell at the market ($). Watch for price swings and royal orders.</li>
-    <li>Build a Lumber Camp at the Guild Hall (H) or by walking into the L site, then hire workers.</li>
+    <li>Leave town by the west gate to the pine grove and chop logs. East of town is copper. South is a fishing pond.</li>
+    <li>Saw logs into planks (Sawbench), smelt ore into bars (Furnace), smith bars into gear (Anvil), and cook fish (Cook fire).</li>
+    <li>Sell at the Market. Watch for price swings and royal orders.</li>
+    <li>Build a Lumber Camp at the Guild Hall or by walking to the signposted camp site, then hire workers.</li>
     <li>Bandits raid camps. Smith swords to arm guards. Wolves drop pelts for platebodies, and ogres in the deep wilds drop star fragments for starmetal.</li>
   </ol>
   <p class="dim small">Progress saves to this browser automatically every 15 seconds.</p>
@@ -1210,37 +1225,6 @@ function onSideClick(e) {
   if (st) { state.style = st.dataset.style; uiDirty = true; }
 }
 
-let charW = 0, charH = 0;
-function measureChar() {
-  const probe = document.createElement('span');
-  probe.textContent = 'M'.repeat(20);
-  probe.style.visibility = 'hidden';
-  $('map').appendChild(probe);
-  const r = probe.getBoundingClientRect();
-  charW = r.width / 20; charH = r.height;
-  probe.remove();
-}
-
-// Fit the viewport to the space available, keeping odd sizes so the player is centred.
-function fitViewport() {
-  measureChar();
-  const avail = $('left').clientWidth - 14;
-  const reserved = window.innerWidth <= 860 ? 450 : 300;
-  const odd = n => (n % 2 ? n : n - 1);
-  VW = odd(clamp(Math.floor(avail / charW), 31, 101));
-  VH = odd(clamp(Math.floor((window.innerHeight - reserved) / charH), 15, 41));
-}
-
-function onMapHover(e) {
-  if (!charW) measureChar();
-  const rect = $('map').getBoundingClientRect();
-  const style = getComputedStyle($('map'));
-  const vx = Math.floor((e.clientX - rect.left - parseFloat(style.paddingLeft)) / charW);
-  const vy = Math.floor((e.clientY - rect.top - parseFloat(style.paddingTop)) / charH);
-  const cam = camera();
-  hoverText = vx >= 0 && vy >= 0 && vx < VW && vy < VH ? describe(cam.x + vx, cam.y + vy) : '';
-}
-
 function setupDpad() {
   let timer = null;
   const stop = () => { clearInterval(timer); timer = null; };
@@ -1275,10 +1259,7 @@ function init() {
   $('modal-close').addEventListener('click', closeModal);
   $('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
   $('side').addEventListener('click', onSideClick);
-  $('map').addEventListener('mousemove', onMapHover);
-  $('map').addEventListener('mouseleave', () => { hoverText = ''; });
-  window.addEventListener('resize', fitViewport);
-  fitViewport();
+  Render3D.init($('view'));
   $('btn-empire').addEventListener('click', () => openModal('empire', {}));
   $('btn-help').addEventListener('click', () => openModal('help'));
   $('btn-save').addEventListener('click', () => { save(); log('Game saved.', 'dim'); });
@@ -1299,6 +1280,7 @@ function init() {
   lastSave = Date.now();
   setInterval(update, TICK);
   update();
+  Render3D.start();
 }
 
 document.addEventListener('DOMContentLoaded', init);

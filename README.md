@@ -1,35 +1,38 @@
-# Ironhold: an ASCII refinement empire
+# Ironhold: a 3D medieval refinement empire
 
 A single-player browser game. You start as one peasant with a worn axe and grow into
 a medieval industrial empire: gather, refine, sell, hire workers, build works, and
 fight off the monsters and bandits of the wilds.
 
-It's plain HTML, CSS and JavaScript with no build step, so it runs on GitHub Pages
-or by opening `index.html` in a browser.
+The world is a low-poly 3D landscape drawn with [three.js](https://threejs.org/), which is
+bundled in `js/lib/`. It's plain HTML, CSS and JavaScript with no build step, so it runs on
+GitHub Pages or by opening `index.html` in a browser.
 
 ## How to play
 
 | Key | Action |
 | --- | --- |
-| Arrows / WASD | Move. Walk into things to interact with them. |
+| Click / tap | Walk there. Click a tree, rock, building or monster to go and use it. |
+| Arrows / WASD | Move one step. Walk into things to interact with them. |
+| Mouse wheel, + / - | Zoom |
 | F | Eat food |
 | C | Cycle combat style (Attack / Strength / Defence) |
 | E | Open the empire panel |
 | ? | Help and legend |
 | Esc | Close a panel |
 
-Hover the map to inspect a tile. On phones, use the on-screen d-pad.
+Hover over things to see what they are. On phones, tap to move or use the on-screen d-pad.
 
 **The loop:**
-1. **Gather** by walking into trees (`t T Y`), rocks (`*`) and fishing spots (`%`).
+1. **Gather** from trees, rocks (the coloured nuggets show the ore) and rippling fishing spots.
    The action repeats until you move. Woodcutting, Mining and Fishing level up as you go.
-2. **Refine** in town: Sawbench `S` (logs to planks), Furnace `F` (ore to bars),
-   Anvil `A` (bars to swords, shields, helms, platebodies, axes and pickaxes), and Cook fire `R`.
+2. **Refine** in town: the Sawbench (logs to planks), Furnace (ore to bars),
+   Anvil (bars to swords, shields, helms, platebodies, axes and pickaxes), and Cook fire.
    Carpentry, Smelting, Smithing and Cooking are separate skills.
-3. **Sell** at the Market `$`. Prices drift every 30 seconds, dumping a lot of one item
+3. **Sell** at the Market. Prices drift every 30 seconds, dumping a lot of one item
    pushes its price down, and random royal orders or gluts swing prices hard.
-4. **Build** at the Guild Hall `H`: camps out in the wilds (`L`, `M`, `P`) gather for you,
-   and works inside the walls refine for you. Workers draw wages every minute.
+4. **Build** at the Guild Hall: camps out in the wilds gather for you, and works inside the
+   walls refine for you. Each one appears on its labelled plot, with workers and guards you can see. Workers draw wages every minute.
 5. **Defend:** bandit threat rises over time, and raids steal from camp stockpiles.
    Arm guards with swords you smith (a higher sword tier makes a stronger guard), and kill bandits to lower the threat.
 
@@ -69,9 +72,11 @@ then visit http://localhost:8000.
 ## Code layout
 
 - `index.html`: page structure
-- `style.css`: layout and the ASCII colour palette
+- `style.css`: layout and UI styling
 - `js/data.js`: all tunable game data (items, recipes, monsters, buildings, balance numbers)
-- `js/game.js`: world generation, game loop, combat, market, empire simulation, saving and UI
+- `js/game.js`: world generation, game loop, combat, market, empire simulation, click-to-move, saving and UI
+- `js/render3d.js`: the 3D world: terrain, trees, rocks, buildings, characters, effects and camera
+- `js/lib/three.min.js`: three.js r149 (MIT licence, see `js/lib/THREE-LICENSE`)
 
 Most balancing happens in `js/data.js`. The `EMPIRE` object there holds worker rates, wages,
 caps and raid timing.
