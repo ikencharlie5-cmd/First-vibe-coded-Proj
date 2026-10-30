@@ -1,7 +1,15 @@
 // Ironhold: game logic, state, input and on-screen UI. The map lives in world.js; drawing in render3d.js.
 'use strict';
 
-const SAVE_KEY = 'ironhold-save-v2';
+const SAVE_KEY = 'ironhold-save-v3';
+const SETTINGS_KEY = 'ironhold-settings';
+const DAY_SECONDS = 1200; // one full day and night takes 20 minutes
+
+// Player preferences live apart from the save, so a reset keeps them.
+const settings = Object.assign({ quality: 'medium', music: 0.5, sfx: 0.8, ambient: 0.7, muted: false }, (() => {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) { return {}; }
+})());
+function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* ignore */ } }
 const TICK = 100;
 const PLAYER_R = 0.3;
 const REACH = 2.1;
@@ -30,18 +38,21 @@ let interactTarget = null;
 let moving = false;
 const keys = new Set();
 const structIndex = new Map(); // tile idx -> struct
-let lastEat = 0, lastRegen = 0, lastSpawn = 0, lastSave = 0, lastTick = 0, lastInteractScan = 0;
+let lastEat = 0, lastRegen = 0, lastSpawn = 0, lastSave = 0, lastTick = 0, lastInteractScan = 0, lastPoiScan = 0;
 
 function newState() {
   const xp = {};
   for (const s of SKILLS) xp[s.id] = 0;
   xp.hitpoints = xpForLevel(10);
   return {
-    v: 2, px: 200, py: 173, face: Math.PI, camYaw: 0, hp: 10, gold: 20, xp,
+    v: 3, px: HOMESTEAD.x + 0.5, py: HOMESTEAD.y + 2, face: Math.PI, camYaw: 0, hp: 10, gold: 20, xp,
     inv: {}, equip: { weapon: null, shield: null, head: null, body: null },
     style: 'attack',
     markets: {}, marketTimer: 0,
-    structs: [], nextStructId: 1, store: {}, home: null,
+    structs: [{ id: 1, type: 'campfire', x: HOMESTEAD.x, y: HOMESTEAD.y, level: 1, pending: null, work: 0, workers: 0, acc: 0, on: true, recipe: 'cook_minnow' }],
+    nextStructId: 2, store: {}, home: null,
+    time: 0.3, weather: { kind: 'clear', left: 240 }, day: 1,
+    pois: {}, opened: {}, shrineUsed: {}, drakeBack: 0,
     threat: 8, raidTimer: 0, unpaid: false,
     discovered: { ironhold: true },
     stats: { kills: 0, earned: 0 },
@@ -86,6 +97,8 @@ function addXp(skill, amount) {
   if (after > before) {
     log(`Level up! ${skillName(skill)} is now level ${after}.`, 'level');
     FX.gain(state.px, state.py, `${skillName(skill)} ${after}!`, 'level');
+    toast(`${skillName(skill)} level ${after}!`, 'level');
+    Sound.sfx('levelup');
     if (skill === 'hitpoints') state.hp += after - before;
   }
   uiDirty = true;
@@ -202,6 +215,7 @@ function eat(id) {
   removeItem(id);
   state.hp = Math.min(maxHp(), state.hp + ITEMS[id].heal);
   lastEat = now;
+  Sound.sfx('eat');
   log(`You eat the ${ITEMS[id].name}. (+${ITEMS[id].heal} HP)`, 'good');
 }
 
@@ -326,13 +340,14 @@ function placeStructure() {
   state.structs.push(s);
   indexStructs();
   log(`${def.name} site placed. Press E at it to build.`, 'good');
+  Sound.sfx('place');
   buildMode = null;
   uiDirty = true;
 }
 
 function startConstruct(s) {
   if (!s.pending) return;
-  action = { type: 'construct', sid: s.id, next: Date.now() + 1000 };
+  action = { type: 'construct', sid: s.id, from: Date.now(), next: Date.now() + 1000 };
 }
 function processConstruct(now) {
   const s = structById(action.sid);
@@ -340,6 +355,7 @@ function processConstruct(now) {
   const c = structCenter(s);
   if (Math.hypot(c.x - state.px, c.y - state.py) > 3.5) { action = null; return; }
   s.work++;
+  Sound.sfx('build');
   addXp('construction', 5 + structDef(s).con * 1.5);
   if (s.work >= workNeeded(s)) {
     s.level = s.pending;
@@ -347,6 +363,8 @@ function processConstruct(now) {
     s.work = 0;
     log(s.level === 1 ? `You finished building the ${structDef(s).name}!` : `${structDef(s).name} upgraded to level ${s.level}!`, 'level');
     FX.gain(state.px, state.py, 'Built!', 'level');
+    Sound.sfx('built');
+    toast(s.level === 1 ? `${structDef(s).name} built` : `${structDef(s).name} upgraded`, 'good');
     if (s.type === 'house' && !state.home) state.home = s.id;
     if (structDef(s).gather && !s.out) s.out = campOutputs(s)[0] || null;
     if (structDef(s).station && !s.recipe) s.recipe = stationRecipes(s.type)[0] || null;
@@ -354,6 +372,7 @@ function processConstruct(now) {
     uiDirty = true;
     return;
   }
+  action.from = now;
   action.next = now + 1000;
 }
 
@@ -450,7 +469,7 @@ function depositAll() {
 
 // ---------------------------------------------------------------- movement & collision
 const nodeActive = (n, now) => !!n && n.until <= now;
-const SOLID_RES = new Set(['pine', 'oak', 'ironwood', 'copper', 'iron', 'coal']);
+const SOLID_RES = new Set(['pine', 'oak', 'ironwood', 'copper', 'iron', 'coal', 'starrock']);
 function solidTile(x, y, now) {
   if (!walkableTerrain(x, y)) return true;
   const i = idx(x, y), n = nodes.get(i);
@@ -496,7 +515,12 @@ function describeTarget(t) {
     const verb = r.skill === 'woodcutting' ? 'Chop' : r.skill === 'mining' ? 'Mine' : r.skill === 'fishing' ? 'Fish at' : 'Gather from';
     return `${verb} ${r.name.toLowerCase()}${r.skill && lvl(r.skill) < r.level ? ` (needs ${skillName(r.skill)} ${r.level})` : ''}`;
   }
-  if (t.kind === 'service') return t.svc.type === 'market' ? `Trade at the ${TOWNS[t.svc.town].name} market` : 'Hire a carriage';
+  if (t.kind === 'service') {
+    if (t.svc.type === 'market') return `Trade at the ${TOWNS[t.svc.town].name} market`;
+    if (t.svc.type === 'carriage') return 'Hire a carriage';
+    if (t.svc.type === 'chest') return state.opened[t.svc.poi] ? 'Search the empty chest' : 'Open the old chest';
+    return 'Pray at the shrine';
+  }
   if (t.kind === 'struct') {
     const def = structDef(t.s);
     if (t.s.pending) return `${t.s.level ? 'Upgrade' : 'Build'} ${def.name} (${buildPct(t.s)}%)`;
@@ -533,7 +557,11 @@ function interact(t) {
   if (!t) return;
   if (t.kind === 'monster') startCombat(t.m);
   else if (t.kind === 'node') startGather(t.i);
-  else if (t.kind === 'service') openPanel(t.svc.type, { town: t.svc.town });
+  else if (t.kind === 'service') {
+    if (t.svc.type === 'chest') openChest(t.svc.poi);
+    else if (t.svc.type === 'shrine') pray(t.svc.poi);
+    else openPanel(t.svc.type, { town: t.svc.town });
+  }
   else if (t.kind === 'struct') { if (t.s.pending) startConstruct(t.s); else openPanel('struct', { sid: t.s.id }); }
 }
 
@@ -567,7 +595,7 @@ function startGather(i) {
   }
   if (!packFree()) { log('Your pack is full.', 'warn'); return; }
   if (action && action.type === 'gather' && action.i === i) return;
-  action = { type: 'gather', i, next: Date.now() + gatherTime(r) };
+  action = { type: 'gather', i, from: Date.now(), next: Date.now() + gatherTime(r) };
 }
 const gatherTime = r => r.time || 2400 - ITEMS[bestTool(r.tool)].tier * 300;
 
@@ -580,14 +608,24 @@ function processGather(now) {
   if (r.tool && !bestTool(r.tool)) { action = null; return; }
   const tier = r.tool ? ITEMS[bestTool(r.tool)].tier : 0;
   const chance = r.skill ? clamp(0.3 + (lvl(r.skill) - r.level) * 0.025 + tier * 0.07, 0.05, 0.95) : 1;
+  if (r.skill === 'woodcutting') Sound.sfx('chop');
+  else if (r.skill === 'mining') Sound.sfx('mine');
   if (Math.random() < chance) {
+    if (r.skill === 'fishing') Sound.sfx('splash');
+    else if (!r.skill) Sound.sfx('pick');
     addItem(r.item);
     FX.gain(state.px, state.py, `+1 ${itemName(r.item)}`);
     if (r.skill) addXp(r.skill, r.xp);
     if (r.stone && Math.random() < r.stone && packFree()) { addItem('stone'); FX.gain(state.px, state.py, '+1 Stone'); }
-    if (Math.random() < r.deplete) { n.until = now + r.respawn * 1000; action = null; return; }
+    if (Math.random() < r.deplete) {
+      n.until = now + r.respawn * 1000;
+      action = null;
+      if (r.skill === 'woodcutting') Sound.sfx('treefall');
+      return;
+    }
     if (!packFree()) { log('Your pack is full.', 'warn'); action = null; return; }
   }
+  action.from = now;
   action.next = now + gatherTime(r);
 }
 
@@ -602,7 +640,7 @@ function startCraft(recipeId, n, sid) {
   if (lvl(r.skill) < r.level) { log(`You need ${skillName(r.skill)} level ${r.level}.`, 'warn'); return; }
   if (!hasAll(r.inputs, ctx.useStore)) { log(`You need ${costText(r.inputs)}.`, 'warn'); return; }
   if (action && action.type !== 'combat') action = null;
-  action = { type: 'craft', recipe: recipeId, left: n, sid, next: Date.now() + 1200 };
+  action = { type: 'craft', recipe: recipeId, left: n, sid, from: Date.now(), next: Date.now() + 1200 };
   closePanel();
 }
 
@@ -615,6 +653,7 @@ function processCraft(now) {
   for (const k in r.inputs) fromPack += Math.min(have(k), r.inputs[k]);
   if (packFree() + fromPack < outN && !(ctx.useStore && storeCap() - storeUsed() >= outN)) { log('Your pack is full.', 'warn'); action = null; return; }
   payAll(r.inputs, ctx.useStore);
+  Sound.sfx({ smithing: 'anvil', smelting: 'furnace', carpentry: 'saw', cooking: 'sizzle', crafting: 'craft' }[r.skill]);
   const give = (id, k) => (packFree() >= k || !ctx.useStore ? addItem(id, k) : addStore(id, k));
   if (r.burn && Math.random() < Math.max(0, 0.45 - (lvl(r.skill) - r.level) * 0.04)) {
     give('burnt_fish', 1);
@@ -626,6 +665,7 @@ function processCraft(now) {
   }
   action.left--;
   if (action.left <= 0 || !hasAll(r.inputs, ctx.useStore)) { action = null; return; }
+  action.from = now;
   action.next = now + 1200;
 }
 
@@ -668,8 +708,9 @@ function updateMonsters(now) {
     if (!m.aggro && def.aggressive && dist <= 6 && cl <= def.level * 2 + 4 && !safe) {
       m.aggro = true;
       log(`A ${def.name.toLowerCase()} is coming for you!`, 'warn');
+      Sound.sfx('growl');
     }
-    if (m.aggro && (dist > 16 || safe || Math.hypot(m.x - m.hx, m.y - m.hy) > 28)) m.aggro = false;
+    if (m.aggro && (dist > 16 || safe || Math.hypot(m.x - m.hx, m.y - m.hy) > (def.boss ? 9 : 28))) m.aggro = false;
     if (now >= m.nextMove) {
       if (m.aggro) {
         if (dist > 1.3) stepToward(m, Math.round(state.px), Math.round(state.py), now);
@@ -686,7 +727,8 @@ function updateMonsters(now) {
     if (m.aggro && dist <= 1.6 && now >= m.nextAtk) {
       monsterAttack(m);
       m.nextAtk = now + def.speed;
-      if (!action) action = { type: 'combat', id: m.id, next: now + 600 };
+      // Fight back automatically, unless that hit just sent you home.
+      if (!action && m.aggro) action = { type: 'combat', id: m.id, next: now + 600 };
     }
   }
   monsters = monsters.filter(m => m.hp > 0);
@@ -717,6 +759,7 @@ function processCombat(now) {
   const dmg = hit ? randInt(1, maxHit) : 0;
   m.aggro = true;
   FX.damage(m.x, m.y, dmg);
+  Sound.sfx(dmg ? 'hit' : 'miss');
   if (dmg > 0) {
     m.hp -= dmg;
     addXp(state.style, dmg * 4);
@@ -734,6 +777,7 @@ function monsterAttack(m) {
   const dmg = hit ? randInt(1, def.maxHit) : 0;
   FX.lunge(m);
   FX.damage(state.px, state.py, dmg, true);
+  Sound.sfx(dmg ? 'hurt' : 'block');
   if (dmg > 0) {
     state.hp -= dmg;
     uiDirty = true;
@@ -751,6 +795,8 @@ function killMonster(m) {
     if (Math.random() < chance) { addItem(id); loot.push(itemName(id)); }
   }
   if (def.threat) state.threat = Math.max(0, state.threat + def.threat);
+  if (def.boss) { state.drakeBack = Date.now() + 5 * 60 * 1000; toast('The Frost Drake falls!', 'level'); }
+  Sound.sfx('defeat');
   log(`You defeat the ${def.name.toLowerCase()}${loot.length ? '. Loot: ' + loot.join(', ') : '.'}`, 'good');
   action = null;
 }
@@ -762,7 +808,7 @@ function respawnPoint() {
       if (!collides(x, y, Date.now())) return { x, y };
     }
   }
-  return { x: TOWN_DEFS.ironhold.x, y: TOWN_DEFS.ironhold.y + 3 };
+  return { x: HOMESTEAD.x + 0.5, y: HOMESTEAD.y + 2 };
 }
 
 function die(killer) {
@@ -773,7 +819,97 @@ function die(killer) {
   state.px = p.x; state.py = p.y;
   action = null;
   for (const m of monsters) m.aggro = false;
+  Sound.sfx('death');
   log(`You were slain by a ${killer.name.toLowerCase()}! You wake up ${lost ? lost + ' gold lighter' : 'bruised'}.`, 'bad');
+}
+
+// ---------------------------------------------------------------- exploration
+const CHEST_LOOT = [['pine_plank', 6], ['copper_bar', 4], ['iron_bar', 2], ['trout', 3], ['rough_gem', 1], ['wolf_pelt', 1], ['oak_plank', 3]];
+function openChest(poi) {
+  if (state.opened[poi]) { log('The chest is empty. Someone got here first... you.', 'dim'); return; }
+  state.opened[poi] = true;
+  const gold = randInt(40, 160);
+  state.gold += gold;
+  const got = [`${gold} gold`];
+  for (let k = 0; k < 2; k++) {
+    const [id, n] = CHEST_LOOT[randInt(0, CHEST_LOOT.length - 1)];
+    addItem(id, n);
+    got.push(`${n} ${itemName(id)}`);
+  }
+  Sound.sfx('chest');
+  log(`You open the chest and find ${got.join(', ')}!`, 'gold');
+  toast('Treasure found!', 'gold');
+}
+function pray(poi) {
+  const now = Date.now();
+  if (state.shrineUsed[poi] && now - state.shrineUsed[poi] < 120000) { log('The shrine is quiet. Come back later.', 'dim'); return; }
+  state.shrineUsed[poi] = now;
+  state.hp = maxHp();
+  Sound.sfx('shrine');
+  log('A warm light washes over you. Your wounds are healed.', 'good');
+  FX.gain(state.px, state.py, 'Healed', 'level');
+}
+function scanPois() {
+  for (const p of pois) {
+    if (state.pois[p.id] || Math.hypot(p.x - state.px, p.y - state.py) > 8) continue;
+    state.pois[p.id] = true;
+    log(`You discovered the ${p.name}.`, 'level');
+    toast(`Discovered: ${p.name}`, 'level');
+    Sound.sfx('discover');
+  }
+  if (!state.pois.summit && Math.hypot(PEAK.x - state.px, PEAK.y - state.py) < 5) {
+    state.pois.summit = true;
+    toast('You reached the summit of Mount Skyhorn!', 'level');
+    Sound.sfx('discover');
+  }
+}
+// One Frost Drake guards the summit; it returns a while after being slain.
+function ensureDrake(now) {
+  if (now < state.drakeBack || monsters.some(m => m.type === 'drake')) return;
+  const x = PEAK.x, y = PEAK.y + 2;
+  if (monsterBlocked(x, y, now)) return;
+  monsters.push({ id: nextMonsterId++, type: 'drake', x, y, hx: x, hy: y, hp: MONSTERS.drake.hp, aggro: false, nextMove: 0, nextAtk: 0 });
+}
+
+// Time of day: 0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset.
+const daylight = () => clamp(Math.sin((state.time - 0.25) * Math.PI * 2) * 2.2 + 0.3, 0, 1);
+const isNight = () => daylight() < 0.25;
+function clockText() {
+  const mins = Math.floor(state.time * 24 * 60);
+  return `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+}
+const WEATHERS = [['clear', 0.5], ['cloudy', 0.22], ['rain', 0.16], ['fog', 0.12]];
+function advanceTime(dt) {
+  const before = state.time;
+  state.time = (state.time + dt / DAY_SECONDS) % 1;
+  if (state.time < before) state.day++;
+  state.weather.left -= dt;
+  if (state.weather.left <= 0) {
+    const kind = pickWeighted(Math.random, WEATHERS);
+    if (kind !== state.weather.kind && kind === 'rain') log('Dark clouds roll in. It starts to rain.', 'dim');
+    state.weather = { kind, left: 150 + Math.random() * 240 };
+  }
+}
+
+// What the music and ambience should be doing right now.
+function soundScene() {
+  const tx = Math.round(state.px), ty = Math.round(state.py);
+  const fighting = (action && action.type === 'combat') || monsters.some(m => m.aggro && Math.hypot(m.x - state.px, m.y - state.py) < 10);
+  const town = townAt(tx, ty, 3);
+  let water = 0, fire = 0;
+  for (let y = ty - 5; y <= ty + 5; y++) for (let x = tx - 5; x <= tx + 5; x++) {
+    if (x < 0 || y < 0 || x >= W || y >= H || terrain[idx(x, y)] !== T.WATER) continue;
+    water = Math.max(water, 1 - Math.hypot(x - state.px, y - state.py) / 6);
+  }
+  for (const s of state.structs) {
+    if ((s.type === 'campfire' || s.type === 'furnace') && s.level) fire = Math.max(fire, 1 - Math.hypot(s.x - state.px, s.y - state.py) / 7);
+  }
+  const night = isNight();
+  return {
+    mood: fighting ? 'combat' : town ? 'town' : night ? 'night' : 'wilds',
+    town, water, fire, night, rain: state.weather.kind === 'rain',
+    wind: clamp(groundHeight(state.px, state.py) / 20, 0.15, 1), forest: biome[idx(tx, ty)] === BIOME.FOREST,
+  };
 }
 
 // ---------------------------------------------------------------- markets
@@ -831,6 +967,7 @@ function sell(town, id, n) {
   state.gold += total;
   state.stats.earned += total;
   log(`Sold ${n} ${itemName(id)} for ${fmt(total)} gold.`, 'gold');
+  Sound.sfx('coins');
 }
 
 function buy(town, id, n) {
@@ -845,6 +982,7 @@ function buy(town, id, n) {
   if (!bought) { log('You cannot afford that.', 'warn'); return; }
   addItem(id, bought);
   log(`Bought ${bought} ${itemName(id)} for ${fmt(total)} gold.`, 'gold');
+  Sound.sfx('coins');
 }
 
 const carriageFee = (from, to) => 15 + Math.round(Math.hypot(TOWN_DEFS[from].x - TOWN_DEFS[to].x, TOWN_DEFS[from].y - TOWN_DEFS[to].y) / 4);
@@ -856,6 +994,7 @@ function travel(from, to) {
   action = null;
   closePanel();
   log(`You ride the carriage to ${TOWNS[to].name}.`, 'good');
+  Sound.sfx('coins');
 }
 
 // ---------------------------------------------------------------- empire simulation
@@ -929,8 +1068,9 @@ function simEmpire(dt, report) {
 }
 
 function logOrReport(report, text, cls) {
-  if (report) report.events.push(text);
-  else log(text, cls);
+  if (report) { report.events.push(text); return; }
+  log(text, cls);
+  if (cls === 'bad') { Sound.sfx('alarm'); toast(text, 'bad'); }
 }
 
 function rollRaids(report) {
@@ -964,7 +1104,7 @@ function runOffline() {
   const elapsed = Math.min((Date.now() - state.savedAt) / 1000, EMPIRE.offlineCapHours * 3600);
   if (elapsed < 30) return null;
   const report = { seconds: elapsed, produced: {}, consumed: {}, wages: 0, events: [] };
-  for (let t = 0; t < elapsed; t += 10) simEmpire(Math.min(10, elapsed - t), report);
+  for (let t = 0; t < elapsed; t += 10) { simEmpire(Math.min(10, elapsed - t), report); advanceTime(Math.min(10, elapsed - t)); }
   for (let k = 0; k < Math.min(200, Math.floor(elapsed / 30)); k++) marketDrift();
   for (const town in TOWNS) state.markets[town].event = null;
   if (!Object.keys(report.produced).length && !report.events.length && !report.wages) return null;
@@ -993,7 +1133,13 @@ function update() {
     lastRegen = now;
     if (state.hp < maxHp()) { state.hp++; uiDirty = true; }
   }
-  if (dt > 0 && dt < 5) simEmpire(dt, null);
+  if (dt > 0 && dt < 5) { simEmpire(dt, null); advanceTime(dt); }
+  if (now - lastPoiScan > 500) {
+    lastPoiScan = now;
+    scanPois();
+    ensureDrake(now);
+    Sound.update(soundScene());
+  }
 
   state.marketTimer += dt;
   if (state.marketTimer >= 30) {
@@ -1006,6 +1152,8 @@ function update() {
   if (town && !state.discovered[town]) {
     state.discovered[town] = true;
     log(`You discovered ${TOWNS[town].name}! ${TOWNS[town].desc}`, 'level');
+    toast(`Discovered: ${TOWNS[town].name}`, 'level');
+    Sound.sfx('discover');
   }
 
   if (now - lastInteractScan > 150) {
@@ -1033,40 +1181,61 @@ function bar(cur, max, cls, label) {
 }
 
 let lastHudKey = '';
+const ico = (id, cls = 'ico') => `<img class="${cls}" src="${Icons.item(id)}" alt="">`;
 function renderHud() {
   const key = [Math.floor(state.gold), state.hp, packUsed(), packCap(), state.style, Math.floor(state.threat), wagesPerMin(), state.unpaid, combatLevel()].join('|');
   if (key !== lastHudKey) {
     lastHudKey = key;
     $('hud-stats').innerHTML = `
-      ${bar(Math.max(0, state.hp), maxHp(), 'hp')}
-      <div class="row"><span class="gold">${fmt(state.gold)} gold</span><span>Pack ${packUsed()}/${packCap()}</span></div>
-      <div class="row small"><span>Combat lvl ${combatLevel()}</span><span>Style: ${cap(state.style)} (X)</span></div>
-      <div class="row small"><span>Bandit threat ${Math.floor(state.threat)}%</span><span>${wagesPerMin() ? `Wages ${wagesPerMin()}g/min` : ''}${state.unpaid ? ' <b class="bad">UNPAID</b>' : ''}</span></div>`;
+      ${bar(Math.max(0, state.hp), maxHp(), 'hp', `${Math.max(0, state.hp)} / ${maxHp()} HP`)}
+      <div class="stat-row">
+        <span title="Gold">${Icons.ui('coin')}<b class="gold">${fmt(state.gold)}</b></span>
+        <span title="Pack space">${Icons.ui('bag')}${packUsed()}/${packCap()}</span>
+        <span title="Combat level and style (X to change)">${Icons.ui('sword')}${combatLevel()}&nbsp;<span class="dim">${cap(state.style)}</span></span>
+      </div>
+      <div class="stat-row small">
+        <span title="Bandit threat: raids get likelier as it rises">${Icons.ui('skull')}Threat ${Math.floor(state.threat)}%</span>
+        ${wagesPerMin() ? `<span title="Wages per minute">${Icons.ui('people')}${wagesPerMin()}g/min${state.unpaid ? ' <b class="bad">UNPAID</b>' : ''}</span>` : ''}
+      </div>`;
   }
   $('zone').textContent = regionName(state.px, state.py);
+  const w = state.weather.kind;
+  $('clock').innerHTML = `${Icons.ui(isNight() ? 'moon' : w === 'rain' ? 'rain' : w === 'clear' ? 'sun' : 'cloud')} Day ${state.day}, ${clockText()}`;
 
   const tgt = action && action.type === 'combat' ? monsters.find(m => m.id === action.id) : null;
   const tEl = $('hud-target');
   if (tgt) {
     const d = MONSTERS[tgt.type];
-    tEl.innerHTML = `<b>${d.name}</b> lvl ${d.level}${bar(Math.max(0, tgt.hp), d.hp, 'enemy')}`;
+    tEl.innerHTML = `<div class="target-name">${d.name} <span class="dim">lvl ${d.level}</span></div>${bar(Math.max(0, tgt.hp), d.hp, 'enemy')}`;
     tEl.classList.remove('hidden');
   } else tEl.classList.add('hidden');
 
-  let prompt = '';
+  let prompt = '', progress = -1;
   if (buildMode) {
     const def = STRUCTS[buildMode.type];
     prompt = `Placing <b>${def.name}</b>: ${buildMode.valid ? '<span class="good">click to place</span>' : `<span class="bad">${esc(buildMode.reason)}</span>`}` +
       `${buildMode.info ? `<br><span class="small">In range: ${esc(buildMode.info)}</span>` : ''}<br><span class="small dim">Right-click or Esc to cancel</span>`;
   } else if (action) {
+    if (action.from && action.next > action.from) progress = clamp((Date.now() - action.from) / (action.next - action.from), 0, 1);
     if (action.type === 'gather') prompt = `${esc(describeTarget({ kind: 'node', n: nodes.get(action.i) }))}...`;
-    else if (action.type === 'craft') prompt = `Making ${esc(itemName(Object.keys(RECIPES[action.recipe].outputs)[0]))} (${action.left} left)`;
+    else if (action.type === 'craft') prompt = `${ico(Object.keys(RECIPES[action.recipe].outputs)[0])} Making ${esc(itemName(Object.keys(RECIPES[action.recipe].outputs)[0]))} (${action.left} left)`;
     else if (action.type === 'construct') { const s = structById(action.sid); prompt = s ? `Building ${structDef(s).name}: ${buildPct(s)}%` : ''; }
     else if (action.type === 'combat') prompt = tgt && Math.hypot(tgt.x - state.px, tgt.y - state.py) > 1.8 ? 'Get closer to attack!' : 'Fighting! <kbd>F</kbd> to eat';
   } else if (interactTarget) prompt = `<kbd>E</kbd> ${esc(describeTarget(interactTarget))}`;
+  const html = prompt + (progress >= 0 ? `<div class="progress"><div style="width:${progress * 100}%"></div></div>` : '');
   const pEl = $('prompt');
-  if (pEl.innerHTML !== prompt) pEl.innerHTML = prompt;
+  if (pEl.innerHTML !== html) pEl.innerHTML = html;
   pEl.classList.toggle('hidden', !prompt);
+}
+
+// Short banners for big moments: level ups, discoveries, raids.
+function toast(text, kind = '') {
+  const el = document.createElement('div');
+  el.className = `toast ${kind}`;
+  el.textContent = text;
+  $('toasts').appendChild(el);
+  setTimeout(() => el.classList.add('out'), 2600);
+  setTimeout(() => el.remove(), 3200);
 }
 
 function renderLog() {
@@ -1146,6 +1315,7 @@ function drawMinimap() {
 // ---------------------------------------------------------------- panels
 function openPanel(kind, data = {}) {
   buildMode = null;
+  Sound.sfx('open');
   panel = { kind, data };
   $('panel').classList.remove('hidden');
   $('panel-body').scrollTop = 0;
@@ -1155,10 +1325,12 @@ function openPanel(kind, data = {}) {
 function closePanel() { panel = null; $('panel').classList.add('hidden'); }
 function togglePanel(kind) { if (panel && panel.kind === kind) closePanel(); else openPanel(kind); }
 
+const PANEL_ICONS = { pack: 'bag', skills: 'star', craft: 'anvil', build: 'hammer', struct: 'house', market: 'coin', carriage: 'wheel',
+  empire: 'castle', help: 'book', offline: 'sun', map: 'map', settings: 'gear' };
 const PANEL_VIEWS = {
   pack: () => packHtml(), skills: () => skillsHtml(), craft: d => craftHtml(d), build: () => buildHtml(), struct: d => structHtml(d),
   market: d => marketHtml(d), carriage: d => carriageHtml(d), empire: () => empireHtml(), help: () => helpHtml(),
-  offline: d => offlineHtml(d), map: () => mapHtml(),
+  offline: d => offlineHtml(d), map: () => mapHtml(), settings: () => settingsHtml(),
 };
 function renderPanel() {
   if (!panel) return;
@@ -1170,28 +1342,46 @@ function renderPanel() {
   body.innerHTML = html;
   body.scrollTop = keepScroll;
   $('panel').classList.toggle('wide', ['map', 'help', 'offline'].includes(panel.kind));
+  $('panel-icon').innerHTML = Icons.ui(PANEL_ICONS[panel.kind] || 'scroll');
   if (panel.kind === 'map') drawWorldMap();
 }
 
 function packHtml() {
-  const ids = Object.keys(state.inv).sort((a, b) => itemName(a).localeCompare(itemName(b)));
+  const ids = Object.keys(state.inv).sort((a, b) => itemCategory(a).localeCompare(itemCategory(b)) || itemName(a).localeCompare(itemName(b)));
   const eq = equipStats();
-  let html = `<p class="small">Carrying ${packUsed()} / ${packCap()}. Click food to eat and gear to equip.</p>`;
-  html += ids.length ? ids.map(id => {
+  let html = `<div class="pack-cap">${bar(packUsed(), packCap(), 'cap', `${packUsed()} / ${packCap()} carried`)}</div>`;
+  html += ids.length ? `<div class="slots">${ids.map(id => {
     const it = ITEMS[id];
-    const tag = it.heal ? `<span class="tag">+${it.heal}hp</span>` : it.slot ? '<span class="tag">equip</span>' : it.tool ? '<span class="tag">tool</span>' : it.pack ? `<span class="tag">+${it.pack} space</span>` : it.rare ? '<span class="tag rare">rare</span>' : '';
-    return `<div class="item${it.heal || it.slot ? ' click' : ''}" data-item="${id}"><span>${esc(it.name)} ${tag}</span><span>x${fmt(state.inv[id])}</span></div>`;
-  }).join('') : '<p class="dim">Your pack is empty. Gather sticks from bushes and stones from loose stones outside town.</p>';
-  html += '<h3>Equipped</h3>';
+    const hint = it.heal ? ` (heals ${it.heal}, click to eat)` : it.slot ? ` (click to equip${it.stats ? ': ' + Object.entries(it.stats).map(([k, v]) => `${k} +${v}`).join(', ') : ''})` : it.tool ? ' (tool)' : it.pack ? ` (+${it.pack} pack space)` : '';
+    return `<div class="slot${it.heal || it.slot ? ' click' : ''}${it.rare ? ' rare' : ''}" data-item="${id}" title="${esc(it.name + hint)}">${ico(id, '')}<span class="qty">${fmt(state.inv[id])}</span></div>`;
+  }).join('')}</div>` : '<p class="dim">Your pack is empty. Gather sticks from bushes and stones from loose stones.</p>';
+  html += '<h3>Equipped</h3><div class="slots equip">';
   for (const slot of ['weapon', 'shield', 'head', 'body']) {
     const id = state.equip[slot];
-    html += `<div class="item${id ? ' click' : ''}" data-unequip="${slot}"><span class="dim">${cap(slot)}</span><span>${id ? esc(itemName(id)) : '-'}</span></div>`;
+    html += `<div class="slot${id ? ' click' : ' empty'}" data-unequip="${slot}" title="${id ? esc(itemName(id)) + ' (click to remove)' : cap(slot)}">${id ? ico(id, '') : `<span class="slot-label">${cap(slot)}</span>`}</div>`;
   }
-  html += `<p class="small">Accuracy +${eq.acc} | Power +${eq.str} | Armour +${eq.def}</p><h3>Tools (the best one is used)</h3>`;
-  for (const t of ['axe', 'pickaxe', 'rod']) html += `<div class="item"><span class="dim">${cap(t)}</span><span>${bestTool(t) ? esc(itemName(bestTool(t))) : 'none'}</span></div>`;
-  html += `<h3>Combat style</h3><div class="row">${['attack', 'strength', 'defence'].map(s => `<button data-style="${s}" class="${state.style === s ? 'on' : ''}">${cap(s)}</button>`).join('')}</div>
+  html += `</div><p class="small">Accuracy +${eq.acc} | Power +${eq.str} | Armour +${eq.def}</p><h3>Tools in use</h3><div class="slots equip">`;
+  for (const t of ['axe', 'pickaxe', 'rod']) {
+    const id = bestTool(t);
+    html += `<div class="slot${id ? '' : ' empty'}" title="${id ? esc(itemName(id)) : 'No ' + t}">${id ? ico(id, '') : `<span class="slot-label">${cap(t)}</span>`}</div>`;
+  }
+  html += `</div><h3>Combat style</h3><div class="row">${['attack', 'strength', 'defence'].map(s => `<button data-style="${s}" class="${state.style === s ? 'on' : ''}">${cap(s)}</button>`).join('')}</div>
     <p class="small dim">Your style gets +3 effective levels and earns the XP.</p>`;
   return ['Pack & Gear', html];
+}
+
+function settingsHtml() {
+  const slider = (key, label) => `<label class="setting"><span>${label}</span><input type="range" min="0" max="1" step="0.05" value="${settings[key]}" data-setting="${key}"><span class="dim">${Math.round(settings[key] * 100)}%</span></label>`;
+  return ['Settings', `
+    <h3>Graphics</h3>
+    <div class="row">${['low', 'medium', 'high'].map(q => `<button data-quality="${q}" class="${settings.quality === q ? 'on' : ''}">${cap(q)}</button>`).join('')}</div>
+    <p class="small dim">Low turns off shadows and most grass and wildlife. High draws the most detail and the furthest view.</p>
+    <h3>Sound</h3>
+    ${slider('music', 'Music')}${slider('sfx', 'Effects')}${slider('ambient', 'Ambience')}
+    <p><button data-mute="1" class="${settings.muted ? 'on' : ''}">${settings.muted ? 'Unmute all' : 'Mute all'}</button></p>
+    <h3>Game</h3>
+    <p><button data-save="1">Save now</button> <button data-help="1">How to play</button> <button data-reset="1" class="danger">Start over</button></p>
+    <p class="small dim">Your game saves automatically every 15 seconds and when you close the page.</p>`];
 }
 
 function skillsHtml() {
@@ -1203,7 +1393,7 @@ function skillsHtml() {
       const lo = xpForLevel(l), hi = xpForLevel(l + 1);
       const pct = l >= MAX_LEVEL ? 100 : (xp - lo) / (hi - lo) * 100;
       html += `<div class="skill" title="${fmt(xp)} XP${l < MAX_LEVEL ? `, ${fmt(hi - xp)} to next level` : ''}">
-        <span>${s.name}</span><span class="lv">${l}</span><div class="xpbar"><div style="width:${pct}%"></div></div></div>`;
+        <span>${Icons.ui('skill-' + s.id)} ${s.name}</span><span class="lv">${l}</span><div class="xpbar"><div style="width:${pct}%"></div></div></div>`;
     }
   }
   html += `<p class="small dim">Kills: ${state.stats.kills} | Lifetime sales: ${fmt(state.stats.earned)}g</p>`;
@@ -1231,7 +1421,7 @@ function craftHtml(data) {
     let maxN = Infinity;
     for (const k in r.inputs) maxN = Math.min(maxN, Math.floor(count(k, ctx.useStore) / r.inputs[k]));
     const stats = it.stats ? ` <span class="dim">[${Object.entries(it.stats).map(([k, v]) => `${k} +${v}`).join(' ')}]</span>` : it.pack ? ` <span class="dim">[+${it.pack} pack space]</span>` : '';
-    html += `<tr class="${locked ? 'locked' : ''}"><td><b>${esc(it.name)}</b>${stats}<br><span class="small">${costHtml(r.inputs, ctx.useStore)}</span></td>
+    html += `<tr class="${locked ? 'locked' : ''}"><td class="icocell">${ico(out, 'ico big')}</td><td><b>${esc(it.name)}</b>${stats}<br><span class="small">${costHtml(r.inputs, ctx.useStore)}</span></td>
       <td class="small">Lvl ${r.level}<br>${r.xp} xp</td><td class="btns">${locked ? 'Locked' :
       `<button data-craft="${r.id}" data-n="1" ${maxN ? '' : 'disabled'}>1</button><button data-craft="${r.id}" data-n="${maxN}" ${maxN ? '' : 'disabled'}>All (${maxN})</button>`}</td></tr>`;
   }
@@ -1289,10 +1479,10 @@ function structHtml(data) {
     const items = Object.keys(state.store).sort((a, b) => itemName(a).localeCompare(itemName(b)));
     html += `<h3>Stock: ${storeUsed()} / ${storeCap()}</h3><p class="small dim">All your storehouses share one stock.</p>
       <button data-sact="deposit" data-arg="all">Deposit all materials</button><table class="list">`;
-    html += items.map(id => `<tr><td>${esc(itemName(id))}</td><td>${fmt(state.store[id])}</td>
+    html += items.map(id => `<tr><td>${ico(id)} ${esc(itemName(id))}</td><td>${fmt(state.store[id])}</td>
       <td class="btns"><button data-sact="withdraw" data-arg="${id}:1">Take 1</button><button data-sact="withdraw" data-arg="${id}:10">10</button><button data-sact="withdraw" data-arg="${id}:999999">All</button></td></tr>`).join('');
     html += '</table><h3>Your pack</h3><table class="list">';
-    html += Object.keys(state.inv).map(id => `<tr><td>${esc(itemName(id))}</td><td>${fmt(have(id))}</td>
+    html += Object.keys(state.inv).map(id => `<tr><td>${ico(id)} ${esc(itemName(id))}</td><td>${fmt(have(id))}</td>
       <td class="btns"><button data-sact="deposit" data-arg="${id}:1">Store 1</button><button data-sact="deposit" data-arg="${id}:999999">All</button></td></tr>`).join('');
     html += '</table>';
   }
@@ -1322,12 +1512,12 @@ function marketHtml(data) {
   const ids = Object.keys(state.inv).sort((a, b) => sellPrice(town, b) * have(b) - sellPrice(town, a) * have(a));
   if (!ids.length) html += '<tr><td class="dim">Nothing to sell.</td></tr>';
   for (const id of ids) {
-    html += `<tr><td>${esc(itemName(id))} <span class="dim">x${fmt(have(id))}</span></td><td>${sellPrice(town, id)}g ${trend(town, id)}</td>
+    html += `<tr><td>${ico(id)} ${esc(itemName(id))} <span class="dim">x${fmt(have(id))}</span></td><td>${sellPrice(town, id)}g ${trend(town, id)}</td>
       <td class="btns"><button data-sell="${id}" data-n="1">1</button><button data-sell="${id}" data-n="10">10</button><button data-sell="${id}" data-n="999999">All</button></td></tr>`;
   }
   html += '</table><button data-sellall="1">Sell all goods (keeps tools, gear and food)</button><h3>Buy</h3><table class="list">';
   for (const id of info.sells) {
-    html += `<tr><td>${esc(itemName(id))}</td><td>${buyPrice(town, id)}g ${trend(town, id)}</td>
+    html += `<tr><td>${ico(id)} ${esc(itemName(id))}</td><td>${buyPrice(town, id)}g ${trend(town, id)}</td>
       <td class="btns"><button data-buy="${id}" data-n="1">1</button><button data-buy="${id}" data-n="10">10</button></td></tr>`;
   }
   return [`${info.name} Market`, html + '</table>'];
@@ -1390,14 +1580,14 @@ function drawWorldMap() {
 
 function helpHtml() {
   return ['How to play', `
-  <p>You arrive in Ironhold with empty pockets and big dreams. Gather, craft, build, trade, and grow a medieval industrial empire.</p>
+  <p>You wake beside a campfire in a quiet clearing south-west of Ironhold, with empty pockets and big dreams. Gather, craft, build, trade, and grow a medieval industrial empire.</p>
   <h3>Controls</h3>
   <p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move, hold <kbd>Shift</kbd> to run | <b>drag the mouse</b> to swing the camera | <b>mouse wheel</b> to zoom<br>
   <kbd>E</kbd> use whatever is in front of you (or click it) | <kbd>F</kbd> eat | <kbd>X</kbd> combat style<br>
-  <kbd>B</kbd> build | <kbd>C</kbd> craft | <kbd>I</kbd> pack | <kbd>K</kbd> skills | <kbd>G</kbd> empire | <kbd>M</kbd> map | <kbd>H</kbd> help | <kbd>Esc</kbd> close</p>
+  <kbd>B</kbd> build | <kbd>C</kbd> craft | <kbd>I</kbd> pack | <kbd>K</kbd> skills | <kbd>G</kbd> empire | <kbd>M</kbd> map | <kbd>H</kbd> help | <kbd>Esc</kbd> close, or open settings</p>
   <h3>Getting started</h3>
   <ol>
-    <li>Leave town and gather <b>sticks</b> from bushes and <b>stones</b> from loose stones. Walk up to them and press <kbd>E</kbd>.</li>
+    <li>Gather <b>sticks</b> from the bushes and <b>stones</b> from the loose stones around your camp. Walk up to them and press <kbd>E</kbd>.</li>
     <li>Press <kbd>C</kbd> and craft a <b>stone axe</b> and a <b>stone pickaxe</b>.</li>
     <li>Chop pine trees. Then press <kbd>B</kbd> and build a <b>Workbench</b> and a <b>Sawbench</b> wherever you like.</li>
     <li>Work towards a <b>Storehouse</b>, a <b>Furnace</b> and an <b>Anvil</b>. Smith copper tools to chop and mine faster.</li>
@@ -1406,7 +1596,9 @@ function helpHtml() {
     <li>Bandits raid camps and storehouses. Smith swords and build <b>Guard Towers</b>.</li>
   </ol>
   <h3>The world</h3>
-  <p>Ironhold sits in the middle. North over the mountains is <b>Stonedeep</b>, and past it the ogre-haunted highlands.
+  <p>Ironhold, the capital, is a short walk north-east of your camp. North over the mountains is <b>Stonedeep</b>, and past it the ogre-haunted highlands.
+  To the east looms <b>Mount Skyhorn</b>: a trail spirals to its summit, where starstone veins and a Frost Drake await.
+  Old ruins, standing stones, abandoned camps and shrines are scattered across the land, and some hide treasure.
   West is the great forest and <b>Thornwood</b>. South-west on the coast is <b>Saltmere</b>. East across the badlands is the bandit market, <b>Rat's Nest</b>.
   Once you've visited a town, its carriage can take you back there.</p>
   <p class="small dim">Progress saves to this browser every 15 seconds.</p>
@@ -1415,8 +1607,8 @@ function helpHtml() {
 
 function offlineHtml(r) {
   const h = Math.floor(r.seconds / 3600), mn = Math.floor(r.seconds % 3600 / 60);
-  const prod = Object.entries(r.produced).map(([k, v]) => `<li>+${fmt(v)} ${esc(itemName(k))}</li>`).join('');
-  const used = Object.entries(r.consumed).map(([k, v]) => `<li>-${fmt(v)} ${esc(itemName(k))}</li>`).join('');
+  const prod = Object.entries(r.produced).map(([k, v]) => `<li>${ico(k)} +${fmt(v)} ${esc(itemName(k))}</li>`).join('');
+  const used = Object.entries(r.consumed).map(([k, v]) => `<li>${ico(k)} -${fmt(v)} ${esc(itemName(k))}</li>`).join('');
   return ['Welcome back!', `<p>You were away for ${h}h ${mn}m${r.seconds >= EMPIRE.offlineCapHours * 3600 ? ' (capped)' : ''}.</p>
     ${prod ? `<h3>Your workers produced</h3><ul>${prod}</ul>` : '<p class="dim">Your workers produced nothing.</p>'}
     ${used ? `<h3>Materials used</h3><ul>${used}</ul>` : ''}
@@ -1436,7 +1628,7 @@ function onKeyDown(e) {
     return;
   }
   if (e.repeat) return;
-  if (k === 'escape') { if (buildMode) buildMode = null; else closePanel(); return; }
+  if (k === 'escape') { if (buildMode) buildMode = null; else if (panel) closePanel(); else openPanel('settings'); return; }
   if (k === 'e') interact(interactTarget);
   else if (k === 'f') eat();
   else if (k === 'x') { const order = ['attack', 'strength', 'defence']; state.style = order[(order.indexOf(state.style) + 1) % 3]; log(`Combat style: ${cap(state.style)}.`); }
@@ -1473,7 +1665,27 @@ function onPanelClick(e) {
   else if (d.style) state.style = d.style;
   else if (d.item) { if (ITEMS[d.item].heal) eat(d.item); else if (ITEMS[d.item].slot) equip(d.item); }
   else if (d.unequip) unequip(d.unequip);
+  else if (d.quality) { settings.quality = d.quality; saveSettings(); Render3D.setQuality(d.quality); }
+  else if (d.mute) { settings.muted = !settings.muted; saveSettings(); Sound.applyVolumes(); }
+  else if (d.save) { save(); log('Game saved.', 'dim'); toast('Game saved'); }
+  else if (d.help) openPanel('help');
+  else if (d.reset) resetGame();
+  if (!d.item && !d.unequip) Sound.sfx('click');
   uiDirty = true;
+}
+function onPanelInput(e) {
+  const key = e.target.dataset.setting;
+  if (!key) return;
+  settings[key] = +e.target.value;
+  e.target.nextElementSibling.textContent = `${Math.round(settings[key] * 100)}%`;
+  saveSettings();
+  Sound.applyVolumes();
+}
+function resetGame() {
+  if (!confirm('Erase your save and start over?')) return;
+  try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ }
+  window.removeEventListener('beforeunload', save);
+  location.reload();
 }
 
 // ---------------------------------------------------------------- boot
@@ -1498,19 +1710,19 @@ function init() {
   for (const b of document.querySelectorAll('[data-open]')) {
     b.addEventListener('click', () => { if (b.dataset.open === 'craft') toggleCraft(); else togglePanel(b.dataset.open); uiDirty = true; });
   }
-  $('btn-save').addEventListener('click', () => { save(); log('Game saved.', 'dim'); });
-  $('btn-reset').addEventListener('click', () => {
-    if (!confirm('Erase your save and start over?')) return;
-    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ }
-    window.removeEventListener('beforeunload', save);
-    location.reload();
-  });
+  $('panel-body').addEventListener('input', onPanelInput);
+  for (const b of document.querySelectorAll('#hotbar [data-icon]')) b.insertAdjacentHTML('afterbegin', Icons.ui(b.dataset.icon));
+  // Browsers only allow sound after the player interacts with the page.
+  const unlock = () => Sound.unlock();
+  document.addEventListener('pointerdown', unlock);
+  document.addEventListener('keydown', unlock);
   window.addEventListener('beforeunload', save);
   document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
 
+  Sound.init();
   Render3D.init($('view'));
 
-  log(loaded ? 'Welcome back to Ironhold.' : 'You arrive in Ironhold with nothing but the clothes on your back.', 'level');
+  log(loaded ? 'Welcome back.' : 'You wake by a campfire in a quiet clearing, with nothing but the clothes on your back.', 'level');
   if (report) openPanel('offline', report);
   else if (!state.seenHelp) { state.seenHelp = true; openPanel('help'); }
 

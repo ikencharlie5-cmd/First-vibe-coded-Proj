@@ -55,6 +55,7 @@ const ITEMS = {
   bandit_signet:  { name: 'Bandit signet',  value: 130, rare: true },
   ogre_tusk:      { name: 'Ogre tusk',      value: 90,  rare: true },
   star_fragment:  { name: 'Star fragment',  value: 160, rare: true },
+  drake_scale:    { name: 'Drake scale',    value: 450, rare: true },
 
   // Hand-made and workbench gear
   stone_axe:      { name: 'Stone axe',      value: 5,   tool: 'axe',     tier: 0, req: 1 },
@@ -95,6 +96,7 @@ const RESOURCES = {
   copper:   { name: 'Copper rock',   skill: 'mining',      level: 1,  xp: 9,  item: 'copper_ore',   deplete: 0.3,  respawn: 8,  tool: 'pickaxe', stone: 0.25 },
   iron:     { name: 'Iron rock',     skill: 'mining',      level: 10, xp: 20, item: 'iron_ore',     deplete: 0.3,  respawn: 14, tool: 'pickaxe', stone: 0.25 },
   coal:     { name: 'Coal rock',     skill: 'mining',      level: 20, xp: 30, item: 'coal',         deplete: 0.3,  respawn: 20, tool: 'pickaxe', stone: 0.25 },
+  starrock: { name: 'Starstone vein', skill: 'mining',     level: 30, xp: 70, item: 'star_fragment', deplete: 0.5, respawn: 180, tool: 'pickaxe' },
   minnow:   { name: 'Minnow shoal',  skill: 'fishing',     level: 1,  xp: 6,  item: 'raw_minnow',   deplete: 0,    respawn: 0,  tool: 'rod' },
   trout:    { name: 'Trout pool',    skill: 'fishing',     level: 10, xp: 15, item: 'raw_trout',    deplete: 0,    respawn: 0,  tool: 'rod' },
   pike:     { name: 'Pike waters',   skill: 'fishing',     level: 20, xp: 28, item: 'raw_pike',     deplete: 0,    respawn: 0,  tool: 'rod' },
@@ -168,6 +170,9 @@ const MONSTERS = {
             coins: [10, 40], drops: [['bandit_signet', 1 / 12], ['iron_bar', 1 / 8], ['rough_gem', 1 / 25]], threat: -8 },
   ogre:   { name: 'Ogre',   level: 28, hp: 50, atk: 25, def: 20, maxHit: 7, speed: 3000, move: 800, aggressive: true,
             coins: [20, 60], drops: [['star_fragment', 1 / 4], ['ogre_tusk', 1 / 3], ['rough_gem', 1 / 10]] },
+  // The guardian of Mount Skyhorn's summit. Only one exists; it returns a while after being slain.
+  drake:  { name: 'Frost Drake', level: 45, hp: 110, atk: 40, def: 35, maxHit: 11, speed: 2800, move: 700, aggressive: true,
+            coins: [80, 200], drops: [['drake_scale', 1], ['star_fragment', 1 / 2], ['rough_gem', 1 / 2]], boss: true },
 };
 
 // Everything the player can build. `con` is the Construction level needed; `work` is how

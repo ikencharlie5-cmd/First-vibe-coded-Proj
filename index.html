@@ -4,38 +4,43 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ironhold</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Alegreya:wght@400;500;700&family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="view" aria-label="Game world"></div>
 
   <div id="hud">
-    <div id="hud-tl" class="hud-box">
-      <div class="brand">IRONHOLD</div>
+    <div id="hud-tl" class="frame">
+      <div class="brand">Ironhold</div>
       <div id="hud-stats"></div>
     </div>
-    <div id="hud-target" class="hud-box hidden"></div>
+    <div id="hud-target" class="frame hidden"></div>
     <div id="hud-tr">
-      <canvas id="minimap" width="190" height="190"></canvas>
+      <div class="minimap-ring"><canvas id="minimap" width="190" height="190"></canvas></div>
       <div id="zone"></div>
+      <div id="clock"></div>
     </div>
-    <div id="prompt" class="hidden"></div>
+    <div id="toasts"></div>
+    <div id="prompt" class="frame hidden"></div>
     <div id="log"></div>
-    <div id="hotbar">
-      <button data-open="build"><kbd>B</kbd>Build</button>
-      <button data-open="craft"><kbd>C</kbd>Craft</button>
-      <button data-open="pack"><kbd>I</kbd>Pack</button>
-      <button data-open="skills"><kbd>K</kbd>Skills</button>
-      <button data-open="empire"><kbd>G</kbd>Empire</button>
-      <button data-open="map"><kbd>M</kbd>Map</button>
-      <button data-open="help"><kbd>H</kbd>Help</button>
-      <button id="btn-save">Save</button>
-      <button id="btn-reset" class="danger">Reset</button>
+    <div id="hotbar" class="frame">
+      <button data-open="build" data-icon="hammer" title="Build (B)"><kbd>B</kbd></button>
+      <button data-open="craft" data-icon="anvil" title="Craft (C)"><kbd>C</kbd></button>
+      <button data-open="pack" data-icon="bag" title="Pack (I)"><kbd>I</kbd></button>
+      <button data-open="skills" data-icon="star" title="Skills (K)"><kbd>K</kbd></button>
+      <button data-open="empire" data-icon="castle" title="Empire (G)"><kbd>G</kbd></button>
+      <button data-open="map" data-icon="map" title="World map (M)"><kbd>M</kbd></button>
+      <button data-open="help" data-icon="book" title="Help (H)"><kbd>H</kbd></button>
+      <button data-open="settings" data-icon="gear" title="Settings (Esc)"><kbd>Esc</kbd></button>
     </div>
   </div>
 
   <div id="panel" class="hidden">
     <div class="panel-head">
+      <span id="panel-icon"></span>
       <span id="panel-title"></span>
       <button id="panel-close" aria-label="Close">&times;</button>
     </div>
@@ -45,6 +50,8 @@
   <script src="js/lib/three.min.js"></script>
   <script src="js/data.js"></script>
   <script src="js/world.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/audio.js"></script>
   <script src="js/game.js"></script>
   <script src="js/render3d.js"></script>
 </body>

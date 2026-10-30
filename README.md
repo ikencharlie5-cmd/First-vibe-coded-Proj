@@ -1,9 +1,9 @@
 # Ironhold: a 3D medieval refinement empire
 
-A single-player browser game. You arrive in the capital with nothing but the clothes on
-your back. Gather sticks and stones, craft your first tools, build your own settlement
-anywhere in the world, hire workers, trade between towns, and grow into a medieval
-industrial empire.
+A single-player browser game. You wake beside a campfire in a quiet clearing with nothing
+but the clothes on your back. Gather sticks and stones, craft your first tools, build your
+own settlement anywhere in the world, hire workers, trade between towns, climb Mount
+Skyhorn, and grow into a medieval industrial empire.
 
 The world is a low-poly 3D landscape drawn with [three.js](https://threejs.org/), which is
 bundled in `js/lib/`. It's plain HTML, CSS and JavaScript with no build step, so it runs on
@@ -27,7 +27,7 @@ GitHub Pages or by opening `index.html` in a browser. It's made for keyboard and
 | G | Empire overview |
 | M | World map |
 | H | Help |
-| Esc | Close a panel or cancel placing a building |
+| Esc | Close a panel, cancel placing a building, or open settings |
 
 ## How it plays
 
@@ -57,6 +57,21 @@ GitHub Pages or by opening `index.html` in a browser. It's made for keyboard and
    pelts, star fragments and more) can't be gathered any other way. Bandits raid camps and
    storehouses, so smith swords and build guard towers.
 
+**Explore.** Ruins and abandoned camps hide treasure chests, shrines heal you, and signposts
+point the way between towns. Mount Skyhorn's spiral trail leads to a summit with starstone
+veins, guarded by a Frost Drake.
+
+**A living world.** Grass, wildflowers, reeds and mushrooms cover the land. Deer, rabbits
+and birds roam, and fish jump in the lakes. A 20-minute day/night cycle brings starry nights
+with glowing windows and lamps, and the weather turns to rain or fog. Towns bustle with
+townsfolk, patrolling guards, market stalls and penned animals, and your workers carry goods
+to your storehouse.
+
+**Sound.** The music is generated live in your browser: lute, flute and drone in a calm
+medieval style that shifts between the wilds, towns, night and combat. Every action has a
+sound effect, and the ambience follows you: wind, birds, crickets, water, rain, fire and
+town chatter. Volumes and graphics quality (Low / Medium / High) are in the settings (Esc).
+
 Progress saves to your browser's localStorage every 15 seconds and when you leave.
 
 ## Play it on GitHub Pages
@@ -84,7 +99,9 @@ then visit http://localhost:8000.
 - `index.html`: page structure and HUD
 - `style.css`: HUD and panel styling
 - `js/data.js`: all tunable game data (items, recipes, monsters, buildings, towns, balance numbers)
-- `js/world.js`: the hand-designed map: mountains, rivers, lakes, coast, roads, towns and resource placement
+- `js/world.js`: the hand-designed map: mountains, Mount Skyhorn, rivers, lakes, coast, roads, towns, town props, ruins and resource placement
+- `js/audio.js`: generated music, sound effects and ambience (Web Audio API, no audio files)
+- `js/icons.js`: item icons drawn on canvas, and the interface's SVG icons
 - `js/game.js`: game logic: movement, gathering, crafting, building, combat, markets, workers, raids, saving and UI panels
-- `js/render3d.js`: the 3D world: terrain, water, trees and rocks, buildings, characters, effects and the orbit camera
+- `js/render3d.js`: the 3D world: terrain, water, sky, weather, day/night, trees, grass, wildlife, towns, buildings, characters, effects and the orbit camera
 - `js/lib/three.min.js`: three.js r149 (MIT licence, see `js/lib/THREE-LICENSE`)

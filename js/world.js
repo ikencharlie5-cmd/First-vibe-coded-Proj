@@ -3,8 +3,8 @@
 'use strict';
 
 const W = 400, H = 320;
-const T = { GRASS: 0, WATER: 1, WALL: 2, FLOOR: 3, ROAD: 4, ROCK: 5, BRIDGE: 6, SAND: 7, SNOW: 8 };
-const WALKABLE = new Set([T.GRASS, T.FLOOR, T.ROAD, T.BRIDGE, T.SAND]);
+const T = { GRASS: 0, WATER: 1, WALL: 2, FLOOR: 3, ROAD: 4, ROCK: 5, BRIDGE: 6, SAND: 7, SNOW: 8, PEAK: 9 };
+const WALKABLE = new Set([T.GRASS, T.FLOOR, T.ROAD, T.BRIDGE, T.SAND, T.PEAK]);
 const BIOME = { MEADOW: 0, FOREST: 1, BADLANDS: 2, HIGHLANDS: 3 };
 const BIOME_NAMES = ['The Meadowlands', 'Thornwood Forest', 'The Badlands', 'The Frost Highlands'];
 
@@ -17,6 +17,9 @@ const nodes = new Map();     // idx -> { res, until }
 const services = new Map();  // idx -> { type: 'market' | 'carriage', town }
 const townBlocks = new Set(); // tiles covered by town buildings
 const townHouses = [];       // { x, y, town } 2x2 decorative houses (x, y = top-left tile)
+const townProps = [];        // { kind, x, y, rot, town } stalls, barrels, lamps, pens...
+const pois = [];             // ruins, standing stones, camps and shrines
+const signs = [];            // { x, y, rot, text } road signposts
 
 const idx = (x, y) => y * W + x;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -56,11 +59,23 @@ const TOWN_DEFS = {
   ratsnest:  { x: 352, y: 238, hw: 7,  hh: 5,  h: 0.6, margin: 4 },
 };
 
+// Where a new game begins: a quiet clearing by a pond, south-west of Ironhold.
+const HOMESTEAD = { x: 164, y: 194 };
+
+// Mount Skyhorn: one giant peak with a spiral trail to the summit.
+const PEAK = { x: 300, y: 122, r: 46, h: 36 };
+const peakProfile = d => PEAK.h * Math.pow(Math.max(0, 1 - d / PEAK.r), 1.5);
+const trailR = p => 40 - 36 * p;
+const trailH = p => peakProfile(trailR(p)) * 0.9 + 0.3;
+const TRAIL = [];
+for (let k = 0; k <= 200; k++) {
+  const p = k / 200, th = Math.PI / 2 + p * Math.PI * 2 * 2.25;
+  TRAIL.push([PEAK.x + Math.cos(th) * trailR(p), PEAK.y + Math.sin(th) * trailR(p), p]);
+}
+
 const RANGES = [
   // The great northern range, with Stonedeep in a valley at its heart.
   { pts: [[0, 66], [60, 58], [120, 66], [170, 60], [210, 62], [260, 56], [320, 64], [400, 58]], width: 22, peak: 11 },
-  // A rocky ridge marking the edge of the badlands.
-  { pts: [[288, 100], [294, 138], [284, 176]], width: 12, peak: 7 },
   // Hills in the south-west.
   { pts: [[20, 230], [36, 260], [30, 296]], width: 14, peak: 6 },
 ];
@@ -72,7 +87,7 @@ const LAKES = [
   { id: 'pond',   x: 176, y: 198, rx: 6,  ry: 4, fish: [['minnow', 1]] },
   { id: 'fen',    x: 86,  y: 240, rx: 10, ry: 7, fish: [['trout', 0.7], ['minnow', 0.3]] },
   { id: 'tarn',   x: 300, y: 22,  rx: 9,  ry: 6, fish: [['pike', 0.7], ['trout', 0.3]] },
-  { id: 'dust',   x: 336, y: 150, rx: 7,  ry: 5, fish: [['trout', 1]] },
+  { id: 'dust',   x: 350, y: 182, rx: 7,  ry: 5, fish: [['trout', 1]] },
 ];
 const RIVER = [[244, 78], [248, 110], [240, 140], [246, 172], [252, 205], [244, 240], [234, 272], [230, 300]];
 const SEA_FISH = [['pike', 0.55], ['trout', 0.45]];
@@ -84,6 +99,7 @@ const ROADS = [
   [[200, 170], [160, 172], [120, 180], [90, 184], [62, 186]],
   [[200, 170], [196, 205], [170, 240], [140, 262], [118, 272]],
   [[200, 170], [250, 172], [280, 196], [320, 220], [352, 238]],
+  [[264, 184], [286, 172], [300, 163]],
 ];
 
 const coastTable = new Float32Array(W * 2 + 4);
@@ -112,6 +128,21 @@ function distPoly(pl, x, y) {
 const rangeLines = RANGES.map(r => Object.assign(polyline(r.pts, r.width), r));
 const riverLine = polyline(RIVER, 4);
 const roadLines = ROADS.map(r => polyline(r, 4));
+const trailLine = polyline(TRAIL, 4);
+// Distance to the trail plus how far along it (0 = foot, 1 = summit) the nearest point is.
+function trailParam(x, y) {
+  if (x < trailLine.x0 || x > trailLine.x1 || y < trailLine.y0 || y > trailLine.y1) return { d: Infinity, p: 0 };
+  let best = Infinity, bp = 0;
+  for (let k = 0; k < TRAIL.length - 1; k++) {
+    const ax = TRAIL[k][0], ay = TRAIL[k][1], dx = TRAIL[k + 1][0] - ax, dy = TRAIL[k + 1][1] - ay;
+    let t = ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy);
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ex = x - ax - t * dx, ey = y - ay - t * dy, d2 = ex * ex + ey * ey;
+    if (d2 < best) { best = d2; bp = TRAIL[k][2] + (TRAIL[k + 1][2] - TRAIL[k][2]) * t; }
+  }
+  return { d: Math.sqrt(best), p: bp };
+}
+const tileTrail = new Float32Array(W * H).fill(99);
 function roadDist(x, y) {
   let best = Infinity;
   for (let k = 0; k < roadLines.length; k++) { const d = distPoly(roadLines[k], x, y); if (d < best) best = d; }
@@ -131,6 +162,16 @@ function heightFn(x, y) {
     }
     h += r.peak * k;
   }
+  const dp = Math.hypot(x - PEAK.x, y - PEAK.y);
+  if (dp < PEAK.r) {
+    const ang = Math.atan2(y - PEAK.y, x - PEAK.x);
+    h += peakProfile(dp) * (0.92 + 0.16 * fbm(noiseB, x / 9, y / 9) + 0.04 * Math.sin(ang * 6));
+    const tp = trailParam(x, y);
+    if (tp.d < 3.4) h = lerp(h, trailH(tp.p), tp.d < 1.7 ? 1 : smooth((3.4 - tp.d) / 1.7));
+    if (dp < 6.5) h = lerp(h, trailH(1) + 0.2, smooth(clamp((6.5 - dp) / 2.5, 0, 1)));
+  }
+  const dh = Math.hypot(x - HOMESTEAD.x, y - HOMESTEAD.y);
+  if (dh < 10) h = lerp(h, 0.45, smooth(clamp((10 - dh) / 5, 0, 1)));
   for (const l of LAKES) {
     let e = Math.sqrt(((x - l.x) / l.rx) ** 2 + ((y - l.y) / l.ry) ** 2);
     if (e > 1.45) continue;
@@ -187,7 +228,10 @@ function generateWorld() {
   const r = mulberry32(2024);
   for (let cy = 0; cy <= H; cy++) for (let cx = 0; cx <= W; cx++) cornerH[cy * (W + 1) + cx] = heightFn(cx - 0.5, cy - 0.5);
 
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) tileRoad[idx(x, y)] = roadDist(x, y);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    tileRoad[idx(x, y)] = roadDist(x, y);
+    if (Math.hypot(x - PEAK.x, y - PEAK.y) < PEAK.r) tileTrail[idx(x, y)] = trailParam(x, y).d;
+  }
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = idx(x, y);
     const h = (cornerH[y * (W + 1) + x] + cornerH[y * (W + 1) + x + 1] + cornerH[(y + 1) * (W + 1) + x] + cornerH[(y + 1) * (W + 1) + x + 1]) / 4;
@@ -201,6 +245,8 @@ function generateWorld() {
       const edge = Math.abs(x - d.x) === d.hw || Math.abs(y - d.y) === d.hh;
       t = d.walls && edge && tileRoad[i] > 1.8 ? T.WALL : T.FLOOR;
     } else if (tileRoad[i] < 1.3) t = h < -0.05 ? T.BRIDGE : T.ROAD;
+    else if (Math.hypot(x - PEAK.x, y - PEAK.y) < 4.6) t = T.PEAK;
+    else if (tileTrail[i] < 1.45) t = h > 7 ? T.PEAK : T.ROAD;
     else if (h < -0.05) t = T.WATER;
     else if (h > 7) t = T.SNOW;
     else if (h > 3) t = T.ROCK;
@@ -288,6 +334,7 @@ function generateWorld() {
     nodes.set(idx(x, y), { res: pickWeighted(r, fish), until: 0 });
   }
 
+  decorateWorld(r);
   computeColors();
 }
 
@@ -307,9 +354,10 @@ function computeColors() {
       }
       case T.SAND: c = [0.84, 0.78, 0.55]; break;
       case T.WATER: case T.BRIDGE: c = [0.16, 0.33, 0.46]; break;
-      case T.ROCK: c = h > 4.8 ? [0.62, 0.6, 0.58] : [0.5, 0.47, 0.43]; break;
+      case T.ROCK: c = h > 4.8 ? [0.62, 0.6, 0.58] : [0.5, 0.47, 0.43]; if (h > 16) c = [0.9, 0.92, 0.95]; break;
       case T.SNOW: c = [0.93, 0.95, 0.98]; break;
-      case T.ROAD: c = [0.62, 0.5, 0.34]; break;
+      case T.ROAD: c = h > 7 ? [0.82, 0.82, 0.84] : [0.62, 0.5, 0.34]; break;
+      case T.PEAK: c = [0.88, 0.9, 0.94]; break;
       case T.WALL: c = [0.45, 0.43, 0.4]; break;
       default: c = townAt(x, y) === 'ironhold' ? [0.6, 0.57, 0.51] : [0.56, 0.47, 0.34];
     }
@@ -336,7 +384,12 @@ function walkableTerrain(x, y) {
 function spawnTable(x, y) {
   const t = nearestTown(x, y);
   if (t.dist < (t.id === 'ironhold' ? 34 : 24)) return null;
+  if (Math.hypot(x - HOMESTEAD.x, y - HOMESTEAD.y) < 24) return null;
   const i = idx(x, y), b = biome[i];
+  if (Math.hypot(x - PEAK.x, y - PEAK.y) < PEAK.r) {
+    if (Math.hypot(x - PEAK.x, y - PEAK.y) < 8) return null;
+    return tileH[i] > 14 ? [['ogre', 0.7], ['wolf', 0.3]] : [['wolf', 0.6], ['bandit', 0.4]];
+  }
   if (b === BIOME.HIGHLANDS) return [['ogre', 0.55], ['wolf', 0.45]];
   if (tileH[i] > 1.4) return [['wolf', 0.5], ['bandit', 0.3], ['goblin', 0.2]];
   if (b === BIOME.BADLANDS) return [['bandit', 0.8], ['wolf', 0.2]];
@@ -349,7 +402,195 @@ function regionName(x, y) {
   const town = townAt(Math.round(x), Math.round(y), 1);
   if (town) return TOWNS[town].name;
   const i = idx(clamp(Math.round(x), 0, W - 1), clamp(Math.round(y), 0, H - 1));
+  if (Math.hypot(x - PEAK.x, y - PEAK.y) < 6) return 'Summit of Mount Skyhorn';
+  if (Math.hypot(x - PEAK.x, y - PEAK.y) < PEAK.r) return 'Mount Skyhorn';
+  if (Math.hypot(x - HOMESTEAD.x, y - HOMESTEAD.y) < 14) return 'Pondside Clearing';
   if (tileH[i] > 1.4 && biome[i] !== BIOME.HIGHLANDS) return 'The Mountains';
   if (y > coastY(x) - 12) return 'The Southern Coast';
   return BIOME_NAMES[biome[i]];
+}
+
+// ------------------------------------------------------------ hand-placed details
+const POI_DEFS = [
+  { id: 'watchtower',  kind: 'ruins',  name: 'Old Watchtower',     x: 128, y: 148 },
+  { id: 'fallenkeep',  kind: 'ruins',  name: 'Fallen Keep',        x: 262, y: 252 },
+  { id: 'mossruins',   kind: 'ruins',  name: 'Mossy Ruins',        x: 64,  y: 118 },
+  { id: 'frostruins',  kind: 'ruins',  name: 'Frozen Ruins',       x: 150, y: 26 },
+  { id: 'whispering',  kind: 'stones', name: 'Whispering Stones',  x: 226, y: 218 },
+  { id: 'redstones',   kind: 'stones', name: 'Red Stones',         x: 322, y: 266 },
+  { id: 'abandoned',   kind: 'camp',   name: 'Abandoned Camp',     x: 150, y: 224 },
+  { id: 'hunters',     kind: 'camp',   name: "Hunters' Camp",      x: 360, y: 30 },
+  { id: 'trapper',     kind: 'camp',   name: "Trapper's Camp",     x: 36,  y: 206 },
+  { id: 'wayside',     kind: 'shrine', name: 'Wayside Shrine',     x: 176, y: 150 },
+  { id: 'mountshrine', kind: 'shrine', name: 'Mountain Shrine',    x: 276, y: 172 },
+  { id: 'passshrine',  kind: 'shrine', name: 'Pass Shrine',        x: 82,  y: 74 },
+];
+
+function decorateWorld(r) {
+  const freeArea = (cx, cy, rad) => {
+    for (let y = cy - rad; y <= cy + rad; y++) for (let x = cx - rad; x <= cx + rad; x++) {
+      if (x < 2 || y < 2 || x >= W - 2 || y >= H - 2) return false;
+      const t = terrain[idx(x, y)];
+      if (t !== T.GRASS && t !== T.SAND) return false;
+      if (tileRoad[idx(x, y)] < 2.5 || townAt(x, y, 6)) return false;
+      if (Math.abs(tileH[idx(x, y)] - tileH[idx(cx, cy)]) > 1) return false;
+    }
+    return true;
+  };
+  const clearNodes = (cx, cy, rad) => {
+    for (let y = cy - rad; y <= cy + rad; y++) for (let x = cx - rad; x <= cx + rad; x++) nodes.delete(idx(x, y));
+  };
+  const block = (x, y) => townBlocks.add(idx(x, y));
+  const grassAt = (x, y) => terrain[idx(x, y)] === T.GRASS && !nodes.has(idx(x, y)) && !townBlocks.has(idx(x, y));
+
+  // The starting clearing: clear the middle, then make sure the basics are close by.
+  clearNodes(HOMESTEAD.x, HOMESTEAD.y, 5);
+  const starters = [['bush', 7], ['pebbles', 7], ['pine', 9], ['copper', 2]];
+  for (const [res, n] of starters) {
+    let placed = 0;
+    for (let tries = 0; tries < 400 && placed < n; tries++) {
+      const a = r() * Math.PI * 2, d = 7 + r() * (res === 'copper' ? 12 : 9);
+      const x = Math.round(HOMESTEAD.x + Math.cos(a) * d), y = Math.round(HOMESTEAD.y + Math.sin(a) * d);
+      if (!grassAt(x, y) || tileRoad[idx(x, y)] < 2) continue;
+      nodes.set(idx(x, y), { res, until: 0 });
+      placed++;
+    }
+  }
+
+  // Starstone veins on the summit of Mount Skyhorn.
+  for (const [dx, dy] of [[-3, -1], [3, 0], [0, -3]]) nodes.set(idx(PEAK.x + dx, PEAK.y + dy), { res: 'starrock', until: 0 });
+
+  // Points of interest, nudged to the nearest open ground.
+  for (const def of POI_DEFS) {
+    let spot = null;
+    for (let rad = 0; rad < 25 && !spot; rad++) {
+      for (let k = 0; k < Math.max(1, rad * 8) && !spot; k++) {
+        const a = k / Math.max(1, rad * 8) * Math.PI * 2;
+        const x = Math.round(def.x + Math.cos(a) * rad), y = Math.round(def.y + Math.sin(a) * rad);
+        if (freeArea(x, y, def.kind === 'shrine' ? 1 : 3)) spot = [x, y];
+      }
+    }
+    if (!spot) continue;
+    const [x, y] = spot;
+    const poi = { id: def.id, kind: def.kind, name: def.name, x, y, parts: [] };
+    clearNodes(x, y, def.kind === 'shrine' ? 2 : 4);
+    const part = (kind, px, py, solid = true, rot = 0) => { poi.parts.push({ kind, x: px, y: py, rot }); if (solid) block(px, py); };
+    if (def.kind === 'ruins') {
+      for (let k = -3; k <= 3; k++) {
+        if (r() < 0.65) part('wall', x + k, y - 3);
+        if (r() < 0.5) part('wall', x - 3, y + k);
+        if (r() < 0.5 && k > -2) part('wall', x + 3, y + k);
+      }
+      part('pillar', x - 1, y + 2); part('pillar', x + 2, y + 2);
+      services.set(idx(x, y), { type: 'chest', poi: def.id });
+    } else if (def.kind === 'stones') {
+      for (let k = 0; k < 8; k++) {
+        const a = k / 8 * Math.PI * 2;
+        part('standing', Math.round(x + Math.cos(a) * 3), Math.round(y + Math.sin(a) * 3), true, a);
+      }
+      services.set(idx(x, y), { type: 'shrine', poi: def.id });
+    } else if (def.kind === 'camp') {
+      part('tent', x - 2, y - 1); part('tent', x + 2, y - 2, true, 1);
+      part('firepit', x, y + 1, false);
+      part('crates', x + 2, y + 1);
+      services.set(idx(x - 1, y + 2), { type: 'chest', poi: def.id });
+    } else {
+      services.set(idx(x, y), { type: 'shrine', poi: def.id });
+    }
+    pois.push(poi);
+  }
+
+  // Signposts a little way out of each town along every road.
+  const townName = id => TOWNS[id].name;
+  const endTown = (px, py) => nearestTown(px, py).id;
+  for (const road of ROADS) {
+    const a = endTown(road[0][0], road[0][1]);
+    const last = road[road.length - 1];
+    const bt = nearestTown(last[0], last[1]);
+    const to = bt.dist < 3 ? townName(bt.id) : 'Mount Skyhorn';
+    const from = townName(a);
+    // Walk along the road to the first point clear of the town.
+    let px = road[0][0], py = road[0][1], k = 0;
+    const [dx, dy] = [road[1][0] - road[0][0], road[1][1] - road[0][1]];
+    const len = Math.hypot(dx, dy);
+    for (k = 0; k < len; k++) { px = road[0][0] + dx / len * k; py = road[0][1] + dy / len * k; if (!townAt(Math.round(px), Math.round(py), 5)) break; }
+    const nx = -dy / len, ny = dx / len;
+    for (const side of [2, -2, 3, -3]) {
+      const sx = Math.round(px + nx * side), sy = Math.round(py + ny * side);
+      if (terrain[idx(sx, sy)] === T.GRASS && !nodes.has(idx(sx, sy))) {
+        signs.push({ x: sx, y: sy, rot: Math.atan2(dx, dy), text: [`< ${from}`, `${to} >`] });
+        block(sx, sy);
+        break;
+      }
+    }
+  }
+
+  // Town life: stalls, barrels, lamps, wells, pens and each town's own touches.
+  const extras = {
+    ironhold: ['stall', 'stall', 'stall', 'barrel', 'barrel', 'crates', 'crates', 'hay', 'cart', 'well', 'banner', 'banner', 'barrel', 'flowers', 'flowers'],
+    stonedeep: ['orecart', 'orecart', 'anvilprop', 'crates', 'barrel', 'well', 'banner', 'stall', 'crates'],
+    saltmere: ['nets', 'nets', 'barrel', 'crates', 'stall', 'well', 'banner', 'barrel'],
+    thornwood: ['logpile', 'logpile', 'logpile', 'stall', 'barrel', 'well', 'banner', 'hay'],
+    ratsnest: ['tent', 'tent', 'tent', 'firepit', 'barrel', 'barrel', 'crates', 'banner', 'stall'],
+  };
+  for (const id in TOWN_DEFS) {
+    const d = TOWN_DEFS[id], tr = mulberry32(id.length * 31 + d.y);
+    const ok = (x, y) => {
+      if (Math.abs(x - d.x) > d.hw - 1 || Math.abs(y - d.y) > d.hh - 1) return false;
+      if (Math.abs(x - d.x) <= 1 || Math.abs(y - d.y) <= 1) return false;
+      const i = idx(x, y);
+      if (terrain[i] !== T.FLOOR || townBlocks.has(i)) return false;
+      for (let yy = y - 1; yy <= y + 1; yy++) for (let xx = x - 1; xx <= x + 1; xx++) {
+        const j = idx(xx, yy);
+        if (services.has(j) || (townBlocks.has(j) && !(xx === x && yy === y))) return false;
+      }
+      return !(x === d.x + 3 && y === d.y - 1);
+    };
+    for (const kind of extras[id]) {
+      for (let tries = 0; tries < 60; tries++) {
+        const x = d.x + Math.round((tr() * 2 - 1) * (d.hw - 1)), y = d.y + Math.round((tr() * 2 - 1) * (d.hh - 1));
+        if (!ok(x, y)) continue;
+        townProps.push({ kind, x, y, rot: Math.floor(tr() * 4) * Math.PI / 2, town: id });
+        block(x, y);
+        break;
+      }
+    }
+    // Lamp posts along the main streets.
+    for (let k = -d.hw + 3; k <= d.hw - 3; k += 5) for (const side of [-2, 2]) {
+      const x = d.x + k, y = d.y + side;
+      if (terrain[idx(x, y)] === T.FLOOR && !townBlocks.has(idx(x, y)) && !services.has(idx(x, y))) {
+        townProps.push({ kind: 'lamp', x, y, rot: 0, town: id });
+        block(x, y);
+      }
+    }
+    // An animal pen just outside town.
+    const pens = { ironhold: [d.x - d.hw - 9, d.y + 3], stonedeep: [d.x + d.hw + 2, d.y + 2], saltmere: [d.x - d.hw - 7, d.y - 3], thornwood: [d.x + d.hw + 2, d.y - 5], ratsnest: [d.x - d.hw - 7, d.y + 1] };
+    const [px, py] = pens[id];
+    let fits = true;
+    for (let y = py; y < py + 4 && fits; y++) for (let x = px; x < px + 5; x++) {
+      const i = idx(x, y);
+      if (terrain[i] !== T.GRASS || tileRoad[i] < 1.8) { fits = false; break; }
+    }
+    if (fits) {
+      for (let y = py; y < py + 4; y++) for (let x = px; x < px + 5; x++) {
+        nodes.delete(idx(x, y));
+        if (y === py || y === py + 3 || x === px || x === px + 4) block(x, y);
+      }
+      townProps.push({ kind: 'pen', x: px, y: py, w: 5, h: 4, town: id, animal: { ironhold: 'cow', stonedeep: 'pig', saltmere: 'chicken', thornwood: 'pig', ratsnest: 'chicken' }[id] });
+    }
+  }
+
+  // Saltmere's fishing dock runs out into the sea, with boats alongside.
+  const sm = TOWN_DEFS.saltmere;
+  const dockX = sm.x + 5;
+  let wet = 0;
+  for (let y = sm.y + sm.hh + 1; y < H - 2 && wet < 5; y++) {
+    const i = idx(dockX, y);
+    if (terrain[i] === T.WATER) { wet++; nodes.delete(i); }
+    terrain[i] = terrain[i] === T.WATER ? T.BRIDGE : T.ROAD;
+    if (wet === 3) {
+      townProps.push({ kind: 'boat', x: dockX - 2, y, rot: 0, town: 'saltmere' });
+      townProps.push({ kind: 'boat', x: dockX + 2, y: y + 1, rot: Math.PI, town: 'saltmere' });
+    }
+  }
 }
