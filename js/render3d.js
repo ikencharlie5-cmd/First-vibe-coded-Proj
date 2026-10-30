@@ -167,22 +167,22 @@ const Render3D = (() => {
     const walls = [], bridges = [];
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const t = terrain[idx(x, y)];
-      if (t === T.WALL) walls.push([x, y]);
+      if (t === T.WALL && townAt(x, y) === 'ironhold') walls.push([x, y]);
       if (t === T.BRIDGE) bridges.push([x, y]);
     }
-    const wall = new C.InstancedMesh(geo('BoxGeometry', 1, 1.6, 1), mat(0x8c867a), walls.length);
-    const cren = new C.InstancedMesh(geo('BoxGeometry', 0.5, 0.3, 1.02), mat(0x7d776c), walls.length);
+    const wall = new C.InstancedMesh(geo('BoxGeometry', 1, 2.8, 1), mat(0x9a948a), walls.length);
+    const cren = new C.InstancedMesh(geo('BoxGeometry', 0.5, 0.45, 1.1), mat(0x8a847a), walls.length);
     walls.forEach(([x, y], k) => {
       const h = tileH[idx(x, y)];
-      wall.setMatrixAt(k, new C.Matrix4().makeTranslation(x, h + 0.7, y));
-      cren.setMatrixAt(k, (x + y) % 2 ? new C.Matrix4().makeTranslation(x, h + 1.65, y) : HIDE);
+      wall.setMatrixAt(k, new C.Matrix4().makeTranslation(x, h + 1.3, y));
+      cren.setMatrixAt(k, (x + y) % 2 ? new C.Matrix4().makeTranslation(x, h + 2.9, y) : HIDE);
     });
     wall.castShadow = cren.castShadow = wall.receiveShadow = true;
     scene.add(wall, cren);
     const d = TOWN_DEFS.ironhold;
     for (const [x, y] of [[d.x - d.hw, d.y - d.hh], [d.x + d.hw, d.y - d.hh], [d.x - d.hw, d.y + d.hh], [d.x + d.hw, d.y + d.hh]]) {
       const h = tileH[idx(x, y)];
-      scene.add(cyl(0.8, 0.85, 2.6, 0x8a8478, x, h + 1.3, y, 8), cone(1.0, 1.1, 0x7a3530, x, h + 3.15, y, 8));
+      scene.add(cyl(1.3, 1.45, 4.4, 0x8a8478, x, h + 2.2, y, 10), cyl(1.5, 1.5, 0.4, 0x7a746a, x, h + 4.5, y, 10), cone(1.6, 2.0, 0x7a3530, x, h + 5.7, y, 10));
     }
     const plank = new C.InstancedMesh(geo('BoxGeometry', 1.0, 0.12, 1.0), mat(0x8a6338), bridges.length);
     const rail = new C.InstancedMesh(geo('BoxGeometry', 0.1, 0.35, 1.0), mat(0x6b4a2b), bridges.length * 2);
@@ -573,18 +573,278 @@ const Render3D = (() => {
     animateLimbs(a, moving, false, dt, t);
   }
 
-  // ------------------------------------------------------------ town models
-  function house(w, d, wallC, roofC, chimney) {
-    const g = new C.Group();
-    g.add(box(w, 1.0, d, wallC, 0, 0.5, 0));
-    const roof = cone(Math.max(w, d) * 0.8, 0.8, roofC, 0, 1.4, 0, 4);
-    roof.rotation.y = Math.PI / 4;
-    roof.scale.set(w / Math.max(w, d), 1, d / Math.max(w, d));
-    g.add(roof, box(0.26, 0.5, 0.04, 0x4a3220, 0, 0.25, d / 2 + 0.01));
-    g.add(mesh(geo('BoxGeometry', 0.24, 0.22, 0.04), windowMat, w * 0.28, 0.6, d / 2 + 0.01, false));
-    g.add(mesh(geo('BoxGeometry', 0.04, 0.22, 0.24), windowMat, w / 2 + 0.01, 0.6, 0, false));
-    if (chimney) g.add(box(0.2, 0.6, 0.2, 0x6b625a, w * 0.25, 1.6, -d * 0.2));
-    return g;
+  // ------------------------------------------------------------ building kit
+  // Roof made of two sloped slabs over a gable wall, ridge running front to back (+z).
+  function gableGeo(w, d, h) {
+    const key = `gable${w},${d},${h}`;
+    if (!geoCache.has(key)) {
+      const sh = new C.Shape();
+      sh.moveTo(-w / 2, 0); sh.lineTo(w / 2, 0); sh.lineTo(0, h); sh.lineTo(-w / 2, 0);
+      const g = new C.ExtrudeGeometry(sh, { depth: d, bevelEnabled: false });
+      g.translate(0, 0, -d / 2);
+      geoCache.set(key, g);
+    }
+    return geoCache.get(key);
+  }
+  function roof(g, w, d, h, y, color, wallColor, opts = {}) {
+    const over = opts.over == null ? 0.25 : opts.over, thick = opts.thick || 0.12;
+    if (wallColor != null) g.add(mesh(gableGeo(w, d, h), mat(wallColor), 0, y, 0));
+    const half = w / 2 + over, slant = Math.hypot(half, h + over * h / (w / 2)), ang = Math.atan2(h, w / 2);
+    for (const sgn of [-1, 1]) {
+      const slab = box(slant, thick, d + over * 2, color, sgn * half / 2 - sgn * over / 2 + sgn * 0.02, y + h / 2 + thick / 2 - 0.02, 0);
+      slab.rotation.z = -sgn * ang;
+      g.add(slab);
+    }
+    g.add(box(0.16, 0.16, d + over * 2 + 0.02, opts.ridge || color, 0, y + h + 0.04, 0));
+  }
+  function win(g, x, y, z, ry, o = {}) {
+    const pane = mesh(geo('BoxGeometry', o.w || 0.42, o.h || 0.5, 0.05), windowMat, 0, 0, 0, false);
+    const grp = new C.Group();
+    grp.add(pane, box((o.w || 0.42) + 0.12, 0.07, 0.12, o.frame || 0x4a3220, 0, -(o.h || 0.5) / 2 - 0.03, 0.04));
+    grp.add(box(0.05, o.h || 0.5, 0.06, o.frame || 0x4a3220, 0, 0, 0.02), box((o.w || 0.42), 0.05, 0.06, o.frame || 0x4a3220, 0, 0, 0.02));
+    if (o.shutter != null) for (const sx of [-1, 1]) grp.add(box(0.2, (o.h || 0.5) + 0.04, 0.04, o.shutter, sx * ((o.w || 0.42) / 2 + 0.11), 0, 0.02));
+    if (o.flowers) {
+      grp.add(box((o.w || 0.42) + 0.1, 0.12, 0.16, 0x7a5232, 0, -(o.h || 0.5) / 2 - 0.1, 0.1));
+      for (let k = 0; k < 3; k++) grp.add(mesh(geo('IcosahedronGeometry', 0.06, 0), mat([0xe04a6a, 0xf0d040, 0xffffff][k]), -0.12 + k * 0.12, -(o.h || 0.5) / 2 - 0.02, 0.12));
+    }
+    grp.position.set(x, y, z);
+    grp.rotation.y = ry;
+    g.add(grp);
+  }
+  function door(g, z, o = {}) {
+    const w = o.w || 0.62, h = o.h || 1.1;
+    g.add(box(w + 0.16, h + 0.1, 0.06, o.frame || 0x3a2614, 0, h / 2 + (o.y || 0.12), z + 0.01));
+    g.add(box(w, h, 0.07, o.color || 0x6a4424, 0, h / 2 + (o.y || 0.12), z + 0.03));
+    if (o.bands) for (const yy of [0.3, 0.8]) g.add(box(w + 0.02, 0.06, 0.09, 0x2a2a2e, 0, yy + (o.y || 0.12), z + 0.04));
+    g.add(box(w + 0.4, 0.12, 0.4, o.step || 0x8a847a, 0, 0.06, z + 0.22));
+  }
+  // Timber frame: posts and rails standing proud of a wall face.
+  function timbers(g, w, d, y0, h, color, braces) {
+    const t = 0.09;
+    for (const sz of [-1, 1]) {
+      const z = sz * (d / 2 + 0.02);
+      for (const x of [-w / 2 + t / 2, -w / 6, w / 6, w / 2 - t / 2]) g.add(box(t, h, t, color, x, y0 + h / 2, z));
+      g.add(box(w, t, t, color, 0, y0 + h - t / 2, z), box(w, t, t, color, 0, y0 + t / 2, z));
+      if (braces) for (const sx of [-1, 1]) { const b = box(t, h * 0.9, t * 0.8, color, sx * w / 3, y0 + h / 2, z); b.rotation.z = sx * 0.55; g.add(b); }
+    }
+    for (const sx of [-1, 1]) {
+      const x = sx * (w / 2 + 0.02);
+      g.add(box(t, h, t, color, x, y0 + h / 2, 0), box(t, t, d, color, x, y0 + h - t / 2, 0));
+    }
+  }
+  const choose = (arr, r) => arr[Math.floor(r * arr.length) % arr.length];
+
+  // ------------------------------------------------------------ town house styles (front faces +z)
+  const HOUSES = {
+    ironhold: (g, r) => {
+      const w = 2.5, d = 2.3, wall = choose([0xe8dcc0, 0xf0e6cc, 0xd8c8a0, 0xe6d6b4, 0xcfc2a6], r), beam = 0x46301c;
+      const roofC = choose([0x8a3a2a, 0x7a4a32, 0x5e4c46, 0x9a5a3a], r * 7), shut = choose([0x3a5a7a, 0x6a3a2a, 0x3a6a3a, 0x7a6a2a], r * 13);
+      const tall = r > 0.35;
+      g.add(box(w + 0.12, 0.3, d + 0.12, 0x7a746a, 0, 0.15, 0));
+      g.add(box(w, 1.5, d, r > 0.7 ? 0x9a948a : wall, 0, 1.05, 0));
+      timbers(g, w, d, 0.3, 1.5, beam, false);
+      door(g, d / 2, { color: 0x5a3a20 });
+      win(g, -0.8, 1.15, d / 2 + 0.03, 0, { shutter: shut });
+      win(g, 0.8, 1.15, d / 2 + 0.03, 0, { shutter: shut });
+      win(g, w / 2 + 0.03, 1.15, 0, Math.PI / 2, { shutter: shut });
+      let top = 1.8, rw = w, rd = d;
+      if (tall) {
+        rw = w + 0.3; rd = d + 0.3;
+        g.add(box(rw, 0.14, rd, beam, 0, top + 0.07, 0), box(rw, 1.35, rd, wall, 0, top + 0.14 + 0.675, 0));
+        timbers(g, rw, rd, top + 0.14, 1.35, beam, true);
+        for (const x of [-0.75, 0, 0.75]) win(g, x, top + 0.85, rd / 2 + 0.03, 0, { shutter: shut, flowers: r > 0.6 && x === 0 });
+        win(g, -rw / 2 - 0.03, top + 0.85, 0, -Math.PI / 2, { shutter: shut });
+        top += 1.49;
+      }
+      roof(g, rw, rd, 1.35, top, roofC, wall, { over: 0.3 });
+      g.add(box(0.07, 1.2, 0.07, beam, 0, top + 0.55, rd / 2 + 0.02));
+      g.add(box(0.42, 1.5, 0.42, 0x8a7a6a, w * 0.25, top + 0.9, -d * 0.18), box(0.5, 0.1, 0.5, 0x6a5a4a, w * 0.25, top + 1.68, -d * 0.18));
+      if (r < 0.25) { g.add(cyl(0.025, 0.025, 0.7, 0x2a2a2a, 0.75, 1.9, d / 2 + 0.35, 4)); const sg = box(0.5, 0.35, 0.04, choose([0xb08850, 0x8a3a2a, 0x3a5a7a], r * 31), 0.75, 1.6, d / 2 + 0.6); sg.rotation.y = Math.PI / 2; g.add(sg); }
+    },
+    stonedeep: (g, r) => {
+      const w = 2.7, d = 2.4, shades = [0x8a857c, 0x7e7970, 0x948f86], slate = choose([0x3a4250, 0x2e3440, 0x44404a], r);
+      for (let k = 0; k < 5; k++) g.add(box(w + (k % 2 ? 0.05 : 0), 0.42, d + (k % 2 ? 0.05 : 0), shades[(k + Math.floor(r * 3)) % 3], 0, 0.21 + k * 0.42, 0));
+      for (const [qx, qz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) for (let k = 0; k < 5; k++) {
+        g.add(box(0.32 + (k % 2) * 0.12, 0.4, 0.32 + ((k + 1) % 2) * 0.12, 0xa8a398, qx * (w / 2 - 0.1), 0.21 + k * 0.42, qz * (d / 2 - 0.1)));
+      }
+      door(g, d / 2 + 0.02, { color: 0x4a3018, bands: true, w: 0.7, h: 1.15, step: 0x6a655e });
+      g.add(box(1.0, 0.25, 0.3, 0xa8a398, 0, 1.42, d / 2 + 0.1));
+      win(g, -0.85, 1.25, d / 2 + 0.04, 0, { w: 0.34, h: 0.4, frame: 0x5a554e });
+      win(g, 0.85, 1.25, d / 2 + 0.04, 0, { w: 0.34, h: 0.4, frame: 0x5a554e });
+      roof(g, w, d, 1.6, 2.1, slate, 0x8a857c, { over: 0.2, thick: 0.16, ridge: 0x2a2e36 });
+      g.add(box(0.7, 4.0, 0.7, 0x7e7970, -w / 2 - 0.25, 2.0, -0.3), box(0.8, 0.15, 0.8, 0x6a655e, -w / 2 - 0.25, 4.05, -0.3));
+    },
+    saltmere: (g, r) => {
+      const w = 2.5, d = 2.2, wall = choose([0xf4f1ea, 0xeef0f2, 0xd6e4ec, 0xf2ead8], r), blue = choose([0x2a5a9a, 0x2a7a9a, 0x3a4a8a], r * 5);
+      g.add(box(w + 0.1, 0.25, d + 0.1, 0x9a948a, 0, 0.12, 0), box(w, 1.6, d, wall, 0, 1.05, 0));
+      door(g, d / 2, { color: blue, frame: 0xf8f8f8 });
+      win(g, -0.8, 1.2, d / 2 + 0.03, 0, { shutter: blue, frame: 0xf8f8f8, flowers: true });
+      win(g, 0.8, 1.2, d / 2 + 0.03, 0, { shutter: blue, frame: 0xf8f8f8 });
+      win(g, w / 2 + 0.03, 1.2, 0, Math.PI / 2, { shutter: blue, frame: 0xf8f8f8 });
+      roof(g, w, d, 1.3, 1.85, 0xc8a860, wall, { over: 0.35, thick: 0.28, ridge: 0xa88a48 });
+      g.add(box(w, 0.1, 0.9, 0x9a7444, 0, 0.3, d / 2 + 0.55));
+      for (const x of [-w / 2 + 0.1, w / 2 - 0.1]) g.add(box(0.1, 1.5, 0.1, 0x7a5232, x, 1.0, d / 2 + 0.95));
+      const canopy = box(w + 0.2, 0.08, 1.0, blue, 0, 1.8, d / 2 + 0.5); canopy.rotation.x = 0.25; g.add(canopy);
+      g.add(box(0.7, 0.25, 0.3, 0x7a5232, 0.7, 0.48, d / 2 + 0.75));
+      if (r > 0.5) { g.add(cyl(0.18, 0.22, 0.35, 0x8a6a3a, -w / 2 - 0.3, 0.18, 0.4, 6), cyl(0.18, 0.22, 0.35, 0x8a6a3a, -w / 2 - 0.35, 0.18, -0.1, 6)); }
+    },
+    thornwood: (g, r) => {
+      const w = 2.6, d = 2.4, log = choose([0x8a6038, 0x7a5430, 0x946a40], r), rad = 0.13;
+      for (let k = 0; k < 7; k++) {
+        const y = rad + k * rad * 2;
+        for (const sz of [-1, 1]) { const l = cyl(rad, rad, w + 0.45, log, 0, y, sz * d / 2, 6); l.rotation.z = Math.PI / 2; g.add(l); }
+        for (const sx of [-1, 1]) { const l = cyl(rad, rad, d + 0.45, log, sx * w / 2, y + rad, 0, 6); l.rotation.x = Math.PI / 2; g.add(l); }
+      }
+      g.add(box(w - 0.1, 1.8, d - 0.1, 0x5a3e24, 0, 0.9, 0));
+      door(g, d / 2 + 0.08, { color: 0x5a3a20, h: 1.15 });
+      win(g, 0.85, 1.15, d / 2 + 0.12, 0, { frame: 0x3a2614 });
+      win(g, -0.85, 1.15, d / 2 + 0.12, 0, { frame: 0x3a2614 });
+      roof(g, w + 0.3, d + 0.3, 1.25, 1.95, 0x4a3a2a, log, { over: 0.35, thick: 0.18 });
+      for (let k = 0; k < 5; k++) g.add(mesh(geo('IcosahedronGeometry', 0.28, 0), mat(0x4a7a2a), (k % 2 ? -1 : 1) * (0.5 + (k % 3) * 0.2), 2.5 + (k % 2) * 0.2, -0.8 + k * 0.4));
+      g.add(box(0.5, 3.6, 0.5, 0x7a746a, w / 2 + 0.2, 1.8, -0.5));
+      for (const sx of [-1, 1]) { const ant = cyl(0.03, 0.04, 0.45, 0xe8dcc0, sx * 0.2, 1.65, d / 2 + 0.2, 4); ant.rotation.z = sx * 0.7; g.add(ant); }
+      g.add(box(w + 0.4, 0.1, 0.9, 0x7a5432, 0, 0.12, d / 2 + 0.6));
+      for (const x of [-w / 2, w / 2]) g.add(cyl(0.08, 0.08, 1.8, log, x, 0.9, d / 2 + 1.0, 6));
+      const pr = box(w + 0.6, 0.1, 1.1, 0x4a3a2a, 0, 1.85, d / 2 + 0.6); pr.rotation.x = 0.22; g.add(pr);
+    },
+    ratsnest: (g, r) => {
+      const w = 2.3, d = 2.1, browns = [0x5a4632, 0x4a3a2a, 0x6a523a, 0x3e3022];
+      for (let k = 0; k < 6; k++) { const h = 1.55 + ((k * 37 + Math.floor(r * 10)) % 5) * 0.08; g.add(box(w / 6 + 0.02, h, 0.1, browns[k % 4], -w / 2 + w / 12 + k * w / 6, h / 2, d / 2)); }
+      g.add(box(w, 1.5, d - 0.1, 0x3e3022, 0, 0.75, -0.05));
+      const dr = box(0.6, 1.05, 0.06, 0x2a2016, 0.3, 0.55, d / 2 + 0.07); dr.rotation.z = 0.05; g.add(dr);
+      const rf = box(w + 0.6, 0.1, d + 0.7, 0x4a4036, 0, 1.85, 0.1); rf.rotation.x = -0.18; g.add(rf);
+      g.add(box(0.9, 0.12, 0.8, choose([0x8a3a2a, 0x3a6a4a, 0x4a5a8a, 0x8a7a3a], r), -0.4, 1.95, 0.3));
+      g.add(box(0.5, 0.45, 0.5, 0x7a5a3a, w / 2 + 0.4, 0.23, d / 2 - 0.2), cyl(0.24, 0.24, 0.55, 0x5a3a20, -w / 2 - 0.35, 0.28, d / 2 - 0.3, 7));
+      g.add(cyl(0.02, 0.02, 0.3, 0x1a1a1a, -0.7, 1.55, d / 2 + 0.25, 4), mesh(geo('BoxGeometry', 0.14, 0.18, 0.14), windowMat, -0.7, 1.35, d / 2 + 0.25, false));
+      const gl = glowSprite(0xffb050, 1.6); gl.position.set(-0.7, 1.35, d / 2 + 0.3); g.add(gl);
+    },
+  };
+
+  // ------------------------------------------------------------ landmarks
+  const LANDMARK_MODELS = {
+    keep: (g, w, d) => {
+      const stone = 0x9a948a, dark = 0x7a746a;
+      g.add(box(w - 1.2, 6.5, d - 1.2, stone, 0, 3.25, 0), box(w - 1.0, 0.3, d - 1.0, dark, 0, 1.0, 0), box(w - 1.0, 0.3, d - 1.0, dark, 0, 4.0, 0));
+      for (let k = 0; k < 14; k++) {
+        const side = k % 4, f = Math.floor(k / 4) / 3 - 0.33;
+        const x = side < 2 ? (side ? 1 : -1) * (w - 1.2) / 2 : f * (w - 1.2), z = side >= 2 ? (side === 2 ? 1 : -1) * (d - 1.2) / 2 : f * (d - 1.2);
+        g.add(box(0.45, 0.5, 0.45, stone, x, 6.75, z));
+      }
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        const x = sx * (w / 2 - 0.7), z = sz * (d / 2 - 0.7);
+        g.add(cyl(0.75, 0.85, 8, stone, x, 4, z, 10), cyl(0.9, 0.9, 0.3, dark, x, 8.1, z, 10), cone(1.0, 1.8, 0x5a3a44, x, 9.15, z, 10));
+        for (const y of [2.5, 5]) win(g, x + sx * 0.02, y, z + sz * 0.8, sz > 0 ? 0 : Math.PI, { w: 0.18, h: 0.5, frame: dark });
+      }
+      g.add(box(1.5, 2.2, 0.3, 0x2a2018, 0, 1.1, d / 2 - 0.55), box(1.9, 0.35, 0.4, dark, 0, 2.35, d / 2 - 0.5));
+      for (let k = 0; k < 5; k++) g.add(box(0.06, 2.0, 0.06, 0x2a2a2e, -0.6 + k * 0.3, 1.1, d / 2 - 0.38));
+      for (const x of [-1.6, 1.6]) g.add(box(0.7, 1.8, 0.05, 0xb0302a, x, 4.6, d / 2 - 0.58), box(0.72, 0.15, 0.06, 0xe8c547, x, 3.75, d / 2 - 0.57));
+      for (const x of [-1.2, 0, 1.2]) win(g, x, 5.4, d / 2 - 0.58, 0, { w: 0.3, h: 0.6, frame: dark });
+      g.add(cyl(0.05, 0.05, 2.5, 0x3a2a1a, 0, 8.2, 0, 5), box(0.05, 0.7, 1.1, 0xb0302a, 0, 9.0, 0.57));
+      g.add(box(2.4, 0.15, 1.6, 0x8a847a, 0, 0.08, d / 2 + 0.4));
+    },
+    mine: (g, w, d) => {
+      g.add(box(w, 2.8, d - 0.6, 0x6a655e, 0, 1.4, -0.4));
+      g.add(box(2.2, 2.0, 0.3, 0x0e0c0a, 0, 1.0, d / 2 - 0.65));
+      for (const x of [-1.25, 1.25]) g.add(box(0.3, 2.6, 0.3, 0x6b4a2b, x, 1.3, d / 2 - 0.5));
+      g.add(box(3.0, 0.35, 0.4, 0x6b4a2b, 0, 2.6, d / 2 - 0.5), box(2.0, 0.4, 0.06, 0x3a2614, 0, 3.0, d / 2 - 0.3));
+      for (let k = 0; k < 6; k++) g.add(box(1.6, 0.06, 0.12, 0x5a3a20, 0, 0.04, d / 2 - 0.5 + k * 0.35));
+      for (const x of [-0.45, 0.45]) g.add(box(0.06, 0.06, 2.2, 0x55555c, x, 0.1, d / 2 + 0.3));
+      g.add(box(0.8, 0.5, 1.0, 0x55555c, 0, 0.45, d / 2 + 0.6), cone(0.42, 0.35, 0xb07a4a, 0, 0.85, d / 2 + 0.6, 6));
+      const frame = new C.Group();
+      for (const sx of [-1, 1]) { const leg = box(0.15, 3.2, 0.15, 0x6b4a2b, sx * 0.7, 1.5, 0); leg.rotation.z = sx * 0.22; frame.add(leg); }
+      const wheel = cyl(0.55, 0.55, 0.1, 0x4a3220, 0, 3.0, 0, 12); wheel.rotation.x = Math.PI / 2;
+      frame.add(wheel);
+      frame.position.set(w / 2 - 0.5, 0, d / 2 - 0.2);
+      g.add(frame);
+      for (const x of [-1.6, 1.6]) { g.add(box(0.08, 1.6, 0.08, 0x2a2a2a, x, 0.8, d / 2 - 0.3), mesh(geo('BoxGeometry', 0.18, 0.22, 0.18), windowMat, x, 1.65, d / 2 - 0.3, false)); const gl = glowSprite(0xffc870, 2); gl.position.set(x, 1.65, d / 2 - 0.3); g.add(gl); }
+    },
+    lighthouse: g => {
+      for (let k = 0; k < 6; k++) g.add(cyl(1.0 - k * 0.08, 1.04 - k * 0.08, 1.2, k % 2 ? 0xc0302a : 0xf4f1ea, 0, 0.6 + k * 1.2, 0, 12));
+      g.add(cyl(0.95, 0.95, 0.15, 0x3a3a40, 0, 7.3, 0, 12));
+      for (let k = 0; k < 10; k++) { const a = k / 10 * Math.PI * 2; g.add(box(0.05, 0.5, 0.05, 0x2a2a2e, Math.cos(a) * 0.9, 7.6, Math.sin(a) * 0.9)); }
+      g.add(mesh(geo('CylinderGeometry', 0.55, 0.55, 0.9, 10), windowMat, 0, 7.85, 0, false), cone(0.75, 0.9, 0xc0302a, 0, 8.75, 0, 10));
+      const gl = glowSprite(0xfff0b0, 7); gl.position.y = 7.85; g.add(gl);
+      g.add(box(1.4, 1.3, 1.2, 0xf4f1ea, 1.3, 0.65, 0.4));
+      roof(g, 1.4, 1.2, 0.6, 1.3, 0x2a5a9a, 0xf4f1ea, { over: 0.15 });
+      door(g, 1.0, { color: 0x2a5a9a, frame: 0xf8f8f8 });
+    },
+    lodge: (g, w, d) => {
+      const log = 0x7a5430, rad = 0.15;
+      for (let k = 0; k < 9; k++) {
+        const y = rad + k * rad * 2;
+        for (const sz of [-1, 1]) { const l = cyl(rad, rad, w + 0.4, log, 0, y, sz * (d / 2 - 0.3), 6); l.rotation.z = Math.PI / 2; g.add(l); }
+        for (const sx of [-1, 1]) { const l = cyl(rad, rad, d - 0.2, log, sx * (w / 2 - 0.3), y + rad, 0, 6); l.rotation.x = Math.PI / 2; g.add(l); }
+      }
+      g.add(box(w - 0.7, 2.6, d - 0.7, 0x5a3e24, 0, 1.3, 0));
+      const rg = new C.Group(); roof(rg, d - 0.4, w - 0.4, 2.0, 0, 0x3e3020, log, { over: 0.45, thick: 0.22 }); rg.rotation.y = Math.PI / 2; rg.position.y = 2.7; g.add(rg);
+      g.add(box(1.4, 1.6, 0.1, 0x4a3018, 0, 0.92, d / 2 - 0.22), box(0.08, 1.6, 0.12, 0x2a1a0a, 0, 0.92, d / 2 - 0.18));
+      for (const x of [-2.6, -1.4, 1.4, 2.6]) win(g, x, 1.4, d / 2 - 0.2, 0, { frame: 0x3a2614 });
+      for (const sx of [-1, 1]) for (let k = 0; k < 3; k++) { const a = cyl(0.03, 0.04, 0.5, 0xe8dcc0, sx * (0.25 + k * 0.12), 2.8 + k * 0.1, d / 2 - 0.15, 4); a.rotation.z = sx * (0.6 + k * 0.3); g.add(a); }
+      for (const x of [-w / 2 + 1.2, w / 2 - 1.2]) g.add(box(0.6, 4.6, 0.6, 0x7a746a, x, 2.3, -d / 2 + 0.6));
+      g.add(box(w, 0.12, 1.0, 0x6a4a2a, 0, 0.1, d / 2 + 0.25));
+    },
+    den: (g, w, d) => {
+      g.add(box(w - 0.4, 2.4, d - 0.4, 0x3e3022, 0, 1.2, 0));
+      for (let k = 0; k < 10; k++) g.add(box((w - 0.4) / 10 + 0.02, 2.3 + (k % 3) * 0.12, 0.1, [0x4a3a2a, 0x3a2e20, 0x5a4632][k % 3], -w / 2 + 0.2 + (k + 0.5) * (w - 0.4) / 10, 1.2, d / 2 - 0.15));
+      const rf = new C.Group(); roof(rf, w - 0.2, d - 0.2, 1.1, 0, 0x2e2822, null, { over: 0.3 }); rf.rotation.y = Math.PI / 2; rf.position.y = 2.4; rf.rotation.z = 0.04; g.add(rf);
+      g.add(box(1.2, 1.5, 0.1, 0x1a1410, 0, 0.75, d / 2 - 0.08));
+      const aw = box(w - 0.6, 0.08, 1.2, 0x5a2a2a, 0, 2.0, d / 2 + 0.35); aw.rotation.x = 0.3; g.add(aw);
+      for (const x of [-w / 2 + 0.5, -0.9, 0.9, w / 2 - 0.5]) { g.add(mesh(geo('BoxGeometry', 0.16, 0.2, 0.16), windowMat, x, 1.75, d / 2 + 0.1, false)); const gl = glowSprite(0xff9a50, 1.8); gl.position.set(x, 1.75, d / 2 + 0.15); g.add(gl); }
+      for (let k = 0; k < 4; k++) g.add(cyl(0.25, 0.25, 0.6, 0x5a3a20, w / 2 + 0.1, 0.3, -1 + k * 0.6, 7));
+      g.add(box(0.05, 2.6, 0.05, 0x2a2a2a, -w / 2 - 0.3, 1.3, d / 2), box(0.05, 0.8, 0.5, 0x1a1a1a, -w / 2 - 0.3, 2.3, d / 2 + 0.26));
+    },
+  };
+
+  // Merge a static group into one mesh per material: hundreds of parts, a handful of draw calls.
+  function bake(src) {
+    src.updateMatrixWorld(true);
+    const byMat = new Map(), keep = [];
+    src.traverse(o => {
+      if (o === src) return;
+      if (o.isMesh && !o.isInstancedMesh && !o.userData.noBake && !o.material.transparent) {
+        const g = (o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone()).applyMatrix4(o.matrixWorld);
+        if (!byMat.has(o.material)) byMat.set(o.material, []);
+        byMat.get(o.material).push(g.attributes.position.array);
+        g.dispose();
+      } else if (o.isSprite || o.isMesh) keep.push(o);
+    });
+    const out = new C.Group();
+    for (const [m, arrs] of byMat) {
+      let n = 0;
+      for (const a of arrs) n += a.length;
+      const pos = new Float32Array(n);
+      let off = 0;
+      for (const a of arrs) { pos.set(a, off); off += a.length; }
+      const g = new C.BufferGeometry();
+      g.setAttribute('position', new C.BufferAttribute(pos, 3));
+      g.computeVertexNormals();
+      const ms = new C.Mesh(g, m);
+      ms.castShadow = ms.receiveShadow = true;
+      out.add(ms);
+    }
+    for (const o of keep) out.attach(o);
+    return out;
+  }
+
+  // Stonedeep's terrace retaining walls and the stairway up the middle.
+  function buildTerraces(group) {
+    const d = TOWN_DEFS.stonedeep;
+    for (let y = d.y - d.hh; y <= d.y + d.hh; y++) for (let x = d.x - d.hw; x <= d.x + d.hw; x++) {
+      if (terrain[idx(x, y)] !== T.WALL) continue;
+      const k = y * (W + 1) + x;
+      const lo = Math.min(cornerH[k], cornerH[k + 1], cornerH[k + W + 1], cornerH[k + W + 2]);
+      const hi = Math.max(cornerH[k], cornerH[k + 1], cornerH[k + W + 1], cornerH[k + W + 2]);
+      const h = hi - lo + 0.45;
+      group.add(box(1.02, h, 1.02, (x + y) % 3 ? 0x8a857c : 0x7e7970, x, lo + h / 2 - 0.05, y));
+      if ((x + y) % 2) group.add(box(0.5, 0.2, 1.04, 0x6a655e, x, hi + 0.5, y));
+    }
+    const rowD = (2 * d.hh + 1) / d.terraces.length;
+    for (let yy = d.y - d.hh; yy <= d.y + d.hh; yy += 0.33) {
+      const h0 = groundHeight(d.x, yy), h1 = groundHeight(d.x, yy + 0.33);
+      if (Math.abs(h1 - h0) < 0.05) continue;
+      group.add(box(3.1, 0.18, 0.36, 0x9a958c, d.x, Math.max(h0, h1) + 0.02, yy + 0.16));
+    }
+    void rowD;
   }
 
   function townsfolk(color) {
@@ -594,16 +854,25 @@ const Render3D = (() => {
   }
 
   function buildTowns() {
-    const styles = {
-      ironhold: [0xd8c9a3, 0x8a2f2a], stonedeep: [0x8a8680, 0x4a4a52], saltmere: [0xe8e0d0, 0x3a6a8a],
-      thornwood: [0x8a6a42, 0x3a5a2a], ratsnest: [0x6a5a4a, 0x3a2a2a],
-    };
-    for (const h of townHouses) {
-      const [wc, rc] = styles[h.town];
-      const g = house(1.7, 1.6, wc, rc, rnd(h.x, h.y) < 0.5);
-      g.position.set(h.x + 0.5, tileH[idx(h.x, h.y)], h.y + 0.5);
-      g.rotation.y = h.rot * Math.PI / 2;
-      scene.add(g);
+    // Every town's houses and landmark are baked together into a few meshes.
+    for (const id in TOWN_DEFS) {
+      const tg = new C.Group();
+      for (const h of townHouses.filter(h => h.town === id)) {
+        const g = new C.Group();
+        HOUSES[id](g, h.seed);
+        g.position.set(h.x + 1, tileH[idx(h.x + 1, h.y + 1)], h.y + 1);
+        g.rotation.y = h.rot;
+        tg.add(g);
+      }
+      for (const lm of townLandmarks.filter(l => l.town === id)) {
+        const g = new C.Group();
+        LANDMARK_MODELS[lm.kind](g, lm.w, lm.h);
+        const cx = lm.x + (lm.w - 1) / 2, cy = lm.y + (lm.h - 1) / 2;
+        g.position.set(cx, tileH[idx(Math.round(cx), Math.round(cy))], cy);
+        tg.add(g);
+      }
+      if (id === 'stonedeep') buildTerraces(tg);
+      scene.add(bake(tg));
     }
     for (const [i, svc] of services) {
       if (svc.type !== 'market' && svc.type !== 'carriage') continue;
@@ -1289,6 +1558,7 @@ const Render3D = (() => {
     if (previewing) return;
     for (let k = 0; k < 5; k++) {
       const p = mesh(geo('IcosahedronGeometry', 0.14, 0), new C.MeshLambertMaterial({ color: 0xb8b8b8, transparent: true, opacity: 0.6 }), x, y, z, false);
+      p.userData.noBake = true;
       smoke.push({ p, x, y, z, phase: k / 5, group });
       group.add(p);
     }
@@ -1297,85 +1567,168 @@ const Render3D = (() => {
     if (previewing) return;
     const f = mesh(geo('ConeGeometry', 0.17 * s, 0.45 * s, 6), glow(0xffa22a), x, y, z, false);
     f.userData.seed = Math.random() * 10;
+    f.userData.noBake = true;
     flames.push(f);
     group.add(f);
   }
 
+  // Your buildings. Each takes (group, struct) and grows with struct.level; size is the footprint in tiles.
+  const lv = s => Math.max(1, s.level || 1);
   const STRUCT_MODELS = {
-    workbench: g => {
-      g.add(box(1.0, 0.1, 0.55, 0x9a7444, 0, 0.6, 0));
-      for (const [x, z] of [[-0.42, -0.2], [0.42, -0.2], [-0.42, 0.2], [0.42, 0.2]]) g.add(box(0.08, 0.6, 0.08, 0x6b4a2b, x, 0.3, z));
-      g.add(box(0.3, 0.06, 0.12, 0x55555c, -0.2, 0.68, 0), box(0.06, 0.06, 0.3, 0x6b4a2b, 0.2, 0.68, 0.05));
+    workbench: (g, s) => {
+      g.add(box(1.0, 0.1, 0.55, 0x9a7444, 0, 0.62, 0));
+      for (const [x, z] of [[-0.42, -0.2], [0.42, -0.2], [-0.42, 0.2], [0.42, 0.2]]) g.add(box(0.08, 0.62, 0.08, 0x6b4a2b, x, 0.31, z));
+      g.add(box(0.9, 0.06, 0.45, 0x8a6338, 0, 0.18, 0), box(0.16, 0.12, 0.14, 0x55555c, -0.38, 0.73, 0.1), box(0.3, 0.06, 0.12, 0x55555c, -0.1, 0.7, 0));
+      g.add(box(0.06, 0.06, 0.3, 0x6b4a2b, 0.25, 0.7, 0.05), box(0.4, 0.05, 0.1, 0xb08850, 0.2, 0.68, -0.15));
+      if (lv(s) >= 2) { g.add(box(0.9, 0.7, 0.06, 0x7a5232, 0, 1.0, -0.3)); for (let k = 0; k < 3; k++) g.add(box(0.05, 0.3, 0.05, 0x55555c, -0.3 + k * 0.3, 1.1, -0.26)); }
+      if (lv(s) >= 3) { for (const x of [-0.5, 0.5]) g.add(box(0.08, 1.8, 0.08, 0x6b4a2b, x, 0.9, -0.35)); const rf = box(1.3, 0.08, 0.9, 0x5a3a20, 0, 1.8, -0.05); rf.rotation.x = 0.25; g.add(rf); }
     },
-    campfire: g => {
-      for (let k = 0; k < 7; k++) {
-        const a = k / 7 * Math.PI * 2;
-        g.add(mesh(geo('DodecahedronGeometry', 0.1, 0), mat(0x77726b), Math.cos(a) * 0.32, 0.06, Math.sin(a) * 0.32));
-      }
+    campfire: (g, s) => {
+      for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; g.add(mesh(geo('DodecahedronGeometry', 0.11, 0), mat(0x77726b), Math.cos(a) * 0.34, 0.07, Math.sin(a) * 0.34)); }
       const l1 = cyl(0.05, 0.05, 0.5, 0x5a3a1e, 0, 0.08, 0, 5), l2 = l1.clone();
       l1.rotation.z = Math.PI / 2; l2.rotation.x = Math.PI / 2;
       g.add(l1, l2);
       flame(g, 0, 0.3, 0);
       addSmoke(g, 0, 0.6, 0);
       if (!previewing) { const gl = glowSprite(0xff9a3a, 2.6, false); gl.position.y = 0.4; g.add(gl); }
-    },
-    sawbench: g => {
-      g.add(box(1.0, 0.08, 0.45, 0x8a6338, 0, 0.5, 0));
-      for (const [x, z] of [[-0.42, -0.17], [0.42, -0.17], [-0.42, 0.17], [0.42, 0.17]]) g.add(box(0.07, 0.5, 0.07, 0x6b4a2b, x, 0.25, z));
-      const log = cyl(0.13, 0.13, 0.9, 0xa07a4a, 0, 0.67, 0, 7);
-      log.rotation.z = Math.PI / 2;
-      g.add(log, box(0.02, 0.3, 0.4, 0xc8ccd2, 0.1, 0.78, 0));
-    },
-    storehouse: g => {
-      g.add(box(1.8, 1.2, 1.6, 0x9a7444, 0, 0.6, 0));
-      const roof = cone(1.35, 0.8, 0x6b3a2a, 0, 1.6, 0, 4);
-      roof.rotation.y = Math.PI / 4; roof.scale.set(1, 1, 0.9);
-      g.add(roof, box(0.7, 0.8, 0.04, 0x5a3a20, 0, 0.4, 0.81));
-      g.add(box(0.35, 0.35, 0.35, 0xb08850, 0.95, 0.18, 0.75), box(0.3, 0.3, 0.3, 0xa07a40, 1.0, 0.5, 0.75));
-    },
-    furnace: g => {
-      g.add(box(0.95, 0.85, 0.85, 0x5f5953, 0, 0.42, 0), mesh(geo('BoxGeometry', 0.4, 0.3, 0.04), glow(0xff7a1a), 0, 0.3, 0.43, false));
-      g.add(cyl(0.14, 0.17, 0.8, 0x4c4741, 0.2, 1.2, -0.2, 6));
-      addSmoke(g, 0.2, 1.65, -0.2);
-      if (!previewing) { const gl = glowSprite(0xff7a1a, 1.8, false); gl.position.set(0, 0.35, 0.6); g.add(gl); }
-    },
-    house: g => {
-      const h = house(1.8, 1.6, 0xd8c9a3, 0x8a4a2a, true);
-      g.add(h);
-      addSmoke(g, 0.45, 2.0, -0.32);
-    },
-    anvil: g => {
-      g.add(cyl(0.25, 0.28, 0.4, 0x6b4a2b, 0, 0.2, 0, 7), box(0.2, 0.15, 0.2, 0x3a3a40, 0, 0.47, 0), box(0.5, 0.14, 0.22, 0x45454c, 0, 0.6, 0));
-      const horn = cone(0.07, 0.22, 0x45454c, 0.34, 0.6, 0, 5);
-      horn.rotation.z = -Math.PI / 2;
-      g.add(horn);
-    },
-    lumber_camp: g => {
-      const tent = cone(0.8, 1.1, 0xc9b48a, -0.4, 0.55, -0.3, 4);
-      tent.rotation.y = Math.PI / 4;
-      g.add(tent);
-      for (let k = 0; k < 3; k++) {
-        const l = cyl(0.11, 0.11, 0.9, 0x8a6338, 0.45, 0.11 + (k === 2 ? 0.19 : 0), 0.3 + (k === 2 ? 0 : (k - 0.5) * 0.24), 6);
-        l.rotation.x = Math.PI / 2;
-        g.add(l);
+      const seat = cyl(0.14, 0.14, 0.9, 0x7a5432, 0, 0.14, 0.75, 6); seat.rotation.z = Math.PI / 2; g.add(seat);
+      if (lv(s) >= 2) { for (const x of [-0.45, 0.45]) { g.add(box(0.05, 0.75, 0.05, 0x5a3a1e, x, 0.38, 0)); } g.add(box(0.95, 0.04, 0.04, 0x3a2a1a, 0, 0.72, 0), box(0.1, 0.06, 0.28, 0xc88a42, 0.1, 0.66, 0)); }
+      if (lv(s) >= 3) {
+        g.add(box(0.06, 1.4, 0.06, 0x5a3a1e, -0.6, 0.7, -0.6), box(0.06, 1.4, 0.06, 0x5a3a1e, 0.6, 0.7, -0.6), box(1.25, 0.05, 0.05, 0x5a3a1e, 0, 1.3, -0.6));
+        for (let k = 0; k < 4; k++) g.add(box(0.08, 0.25, 0.04, 0xc88a42, -0.4 + k * 0.27, 1.12, -0.6));
       }
-      g.add(cyl(0.2, 0.22, 0.3, 0x7a5a3a, 0.4, 0.15, -0.5, 7));
     },
-    mine: g => {
-      g.add(box(1.6, 1.1, 0.9, 0x6a645c, 0, 0.55, -0.3), box(0.8, 0.8, 0.05, 0x141414, 0, 0.4, 0.16));
-      g.add(box(0.12, 0.95, 0.12, 0x6b4a2b, -0.45, 0.47, 0.2), box(0.12, 0.95, 0.12, 0x6b4a2b, 0.45, 0.47, 0.2), box(1.05, 0.12, 0.14, 0x6b4a2b, 0, 0.95, 0.2));
-      g.add(box(0.4, 0.25, 0.3, 0x55555c, 0.55, 0.2, 0.6), cone(0.25, 0.3, 0xb07a4a, -0.55, 0.15, 0.6, 5));
+    sawbench: (g, s) => {
+      g.add(box(1.1, 0.08, 0.45, 0x8a6338, 0, 0.55, 0));
+      for (const [x, z] of [[-0.45, -0.17], [0.45, -0.17], [-0.45, 0.17], [0.45, 0.17]]) g.add(box(0.07, 0.55, 0.07, 0x6b4a2b, x, 0.27, z));
+      const log = cyl(0.14, 0.14, 1.0, 0xa07a4a, 0, 0.72, 0, 7); log.rotation.z = Math.PI / 2;
+      g.add(log, box(0.02, 0.32, 0.45, 0xc8ccd2, 0.15, 0.85, 0), box(0.3, 0.08, 0.06, 0x6b4a2b, 0.15, 1.04, 0));
+      for (let k = 0; k < (lv(s) >= 2 ? 6 : 3); k++) g.add(box(0.9, 0.06, 0.16, 0xd9b17a, -0.05, 0.04 + Math.floor(k / 3) * 0.07, 0.42 + (k % 3) * 0.17));
+      if (lv(s) >= 2) { for (const [x, z] of [[-0.55, -0.45], [0.55, -0.45]]) g.add(box(0.08, 1.7, 0.08, 0x6b4a2b, x, 0.85, z)); const rf = box(1.4, 0.07, 1.0, 0x6b4a2b, 0, 1.75, -0.1); rf.rotation.x = 0.3; g.add(rf); }
+      if (lv(s) >= 3) { const wheel = cyl(0.45, 0.45, 0.08, 0x5a3a20, -0.62, 0.55, 0.3, 10); wheel.rotation.z = Math.PI / 2; g.add(wheel); for (let k = 0; k < 4; k++) { const sp = box(0.04, 0.85, 0.04, 0x3a2a1a, -0.62, 0.55, 0.3); sp.rotation.x = k * Math.PI / 4; g.add(sp); } }
     },
-    dock: g => {
-      const hut = house(1.0, 0.9, 0x9a7a52, 0x5a4a3a);
-      hut.position.set(-0.35, 0, -0.35);
-      g.add(hut);
-      for (let k = 0; k < 4; k++) g.add(box(0.5, 0.06, 0.38, 0x8a6338, 0.45, 0.12, -0.6 + k * 0.4));
-      g.add(box(0.6, 0.5, 0.05, 0x6b4a2b, 0.4, 0.35, 0.75));
+    furnace: (g, s) => {
+      const L = lv(s), h = 0.85 + (L - 1) * 0.25;
+      g.add(box(0.95, h, 0.85, 0x5f5953, 0, h / 2, 0), box(0.75, 0.2, 0.65, 0x6a645e, 0, h + 0.1, 0));
+      g.add(mesh(geo('BoxGeometry', 0.4, 0.3, 0.04), glow(0xff7a1a), 0, 0.3, 0.43, false), box(0.5, 0.06, 0.08, 0x3a3530, 0, 0.48, 0.44));
+      g.add(cyl(0.14, 0.17, 0.9 + L * 0.3, 0x4c4741, 0.2, h + 0.4 + L * 0.15, -0.2, 6));
+      addSmoke(g, 0.2, h + 0.9 + L * 0.3, -0.2);
+      if (!previewing) { const gl = glowSprite(0xff7a1a, 1.8, false); gl.position.set(0, 0.35, 0.6); g.add(gl); }
+      if (L >= 2) { g.add(box(0.3, 0.25, 0.45, 0x7a5232, 0.62, 0.3, 0.1)); const nz = cone(0.06, 0.25, 0x3a3530, 0.5, 0.3, 0.1, 5); nz.rotation.z = Math.PI / 2; g.add(nz); }
+      if (L >= 3) { g.add(cone(0.35, 0.35, 0x1a1a1c, -0.6, 0.17, 0.3, 6)); for (let k = 0; k < 3; k++) g.add(box(0.22, 0.07, 0.1, 0xc77a3a, -0.55, 0.04 + k * 0.08, -0.3)); }
     },
-    guard_tower: g => {
-      g.add(cyl(0.42, 0.5, 2.4, 0x8a8478, 0, 1.2, 0, 8), cyl(0.58, 0.58, 0.3, 0x7a746c, 0, 2.55, 0, 8), cone(0.6, 0.8, 0x7a3530, 0, 3.1, 0, 8));
-      g.add(cyl(0.02, 0.02, 0.8, 0x5a3a1e, 0, 3.7, 0, 4), box(0.03, 0.22, 0.36, 0xc0392b, 0, 3.95, 0.18));
+    anvil: (g, s) => {
+      g.add(cyl(0.25, 0.28, 0.4, 0x6b4a2b, 0, 0.2, 0, 7), box(0.2, 0.15, 0.2, 0x3a3a40, 0, 0.47, 0), box(0.5, 0.14, 0.22, 0x45454c, 0, 0.6, 0));
+      const horn = cone(0.07, 0.22, 0x45454c, 0.34, 0.6, 0, 5); horn.rotation.z = -Math.PI / 2; g.add(horn);
+      g.add(cyl(0.22, 0.22, 0.5, 0x5a3a20, 0.6, 0.25, 0.35, 7), cyl(0.2, 0.2, 0.02, 0x2a4a6a, 0.6, 0.49, 0.35, 7));
+      if (lv(s) >= 2) {
+        g.add(box(0.7, 0.6, 0.6, 0x6a645e, -0.65, 0.3, -0.2), mesh(geo('BoxGeometry', 0.45, 0.08, 0.4), glow(0xff6a1a), -0.65, 0.62, -0.2, false));
+        if (!previewing) { const gl = glowSprite(0xff6a1a, 1.4, false); gl.position.set(-0.65, 0.75, -0.2); g.add(gl); }
+      }
+      if (lv(s) >= 3) {
+        for (const [x, z] of [[-1, -0.6], [1, -0.6], [-1, 0.6], [1, 0.6]]) g.add(box(0.09, 2.0, 0.09, 0x6b4a2b, x * 0.95, 1.0, z));
+        roof(g, 2.1, 1.4, 0.55, 2.0, 0x6b4a2b, null, { over: 0.1 });
+        for (let k = 0; k < 3; k++) { const sw = box(0.04, 0.5, 0.04, 0xc8ccd2, -0.3 + k * 0.2, 1.3, -0.62); g.add(sw); }
+      }
+    },
+    storehouse: (g, s) => {
+      const S = structSize(s) - 0.3, L = lv(s), wh = 1.7 + (L - 1) * 0.4;
+      g.add(box(S, 0.2, S - 0.2, 0x7a746a, 0, 0.1, 0), box(S - 0.1, wh, S - 0.4, 0x9a7444, 0, 0.2 + wh / 2, 0));
+      for (let k = 0; k < 7; k++) g.add(box(0.06, wh, 0.05, 0x7a5432, -S / 2 + 0.2 + k * (S - 0.4) / 6, 0.2 + wh / 2, (S - 0.4) / 2 + 0.02));
+      roof(g, S - 0.1, S - 0.4, 1.0 + L * 0.15, 0.2 + wh, 0x6b3a2a, 0x9a7444, { over: 0.25, thick: 0.14 });
+      g.add(box(1.0, 1.25, 0.06, 0x5a3a20, 0, 0.83, (S - 0.4) / 2 + 0.05));
+      for (const sx of [-1, 1]) { const brace = box(0.06, 1.3, 0.04, 0x3a2614, sx * 0.25, 0.83, (S - 0.4) / 2 + 0.09); brace.rotation.z = sx * 0.6; g.add(brace); }
+      g.add(box(0.45, 0.45, 0.45, 0xb08850, S / 2 + 0.1, 0.23, S / 2 - 0.6), box(0.38, 0.38, 0.38, 0xa07a40, S / 2 + 0.12, 0.65, S / 2 - 0.6), cyl(0.22, 0.22, 0.5, 0x7a5232, -S / 2 - 0.05, 0.25, S / 2 - 0.5, 8));
+      if (L >= 2) { win(g, 0, 0.2 + wh + 0.45, (S - 0.4) / 2 + 0.02, 0, { w: 0.5, h: 0.5 }); g.add(box(0.12, 0.12, 0.9, 0x6b4a2b, 0, 0.2 + wh + 1.0, (S - 0.4) / 2 + 0.35)); g.add(cyl(0.015, 0.015, 1.2, 0xc8b890, 0, 0.2 + wh + 0.4, (S - 0.4) / 2 + 0.75, 4)); }
+      if (L >= 3) { g.add(box(1.0, 1.4, S - 0.8, 0x8a6a40, -S / 2 - 0.45, 0.7, 0)); const lt = box(1.3, 0.08, S - 0.5, 0x6b3a2a, -S / 2 - 0.45, 1.5, 0); lt.rotation.z = 0.35; g.add(lt); }
+    },
+    house: (g, s) => {
+      const S = structSize(s), L = lv(s), w = S - 0.7, d = S - 0.9, wall = 0xe6d6b4, beam = 0x46301c, shut = 0x3a6a3a;
+      g.add(box(w + 0.12, 0.3, d + 0.12, 0x7a746a, 0, 0.15, 0), box(w, 1.5, d, wall, 0, 1.05, 0));
+      timbers(g, w, d, 0.3, 1.5, beam, false);
+      door(g, d / 2, { color: 0x5a3a20 });
+      win(g, -w * 0.32, 1.15, d / 2 + 0.03, 0, { shutter: shut, flowers: true });
+      win(g, w * 0.32, 1.15, d / 2 + 0.03, 0, { shutter: shut });
+      let top = 1.8, rw = w, rd = d;
+      if (L >= 2) {
+        rw = w + 0.3; rd = d + 0.3;
+        g.add(box(rw, 0.14, rd, beam, 0, top + 0.07, 0), box(rw, 1.3, rd, wall, 0, top + 0.79, 0));
+        timbers(g, rw, rd, top + 0.14, 1.3, beam, true);
+        win(g, -0.5, top + 0.8, rd / 2 + 0.03, 0, { shutter: shut }); win(g, 0.5, top + 0.8, rd / 2 + 0.03, 0, { shutter: shut });
+        top += 1.44;
+      }
+      roof(g, rw, rd, 1.3, top, 0x8a4a2a, wall, { over: 0.3 });
+      g.add(box(0.4, 1.4, 0.4, 0x8a7a6a, w * 0.25, top + 0.85, -d * 0.18));
+      addSmoke(g, w * 0.25, top + 1.7, -d * 0.18);
+      if (L >= 3) {
+        g.add(box(1.0, 1.3, d - 0.4, wall, w / 2 + 0.5, 0.95, -0.1));
+        const sr = box(1.3, 0.1, d, 0x8a4a2a, w / 2 + 0.55, 1.75, -0.1); sr.rotation.z = -0.4; g.add(sr);
+        for (let k = 0; k < 5; k++) g.add(box(0.06, 0.45, 0.06, 0x8a6a40, -S / 2 + 0.15 + k * (S - 0.3) / 4, 0.22, S / 2 - 0.05));
+        g.add(box(S - 0.2, 0.05, 0.05, 0x8a6a40, 0, 0.38, S / 2 - 0.05));
+      }
+    },
+    lumber_camp: (g, s) => {
+      const S = structSize(s), L = lv(s);
+      const tent = cone(0.85, 1.2, 0xc9b48a, -S / 4, 0.6, -S / 4, 4); tent.rotation.y = Math.PI / 4; g.add(tent);
+      for (let k = 0; k < 3 + L * 2; k++) { const l = cyl(0.12, 0.12, 1.1, 0x8a6338, S / 4 + (k % 3 - 1) * 0.26, 0.12 + Math.floor(k / 3) * 0.22, S / 4, 6); l.rotation.x = Math.PI / 2; g.add(l); }
+      g.add(cyl(0.22, 0.25, 0.35, 0x7a5a3a, -S / 4, 0.17, S / 4, 7));
+      if (L >= 2) { for (const [x, z] of [[0, -S / 2 + 0.3], [S / 2 - 0.3, -S / 2 + 0.3]]) g.add(box(0.1, 1.7, 0.1, 0x6b4a2b, x, 0.85, z)); const rf = box(S / 2 + 0.2, 0.08, 1.0, 0x5a3a20, S / 4 - 0.15, 1.7, -S / 2 + 0.6); rf.rotation.x = -0.25; g.add(rf); }
+      if (L >= 3) { const cab = new C.Group(); HOUSES.thornwood(cab, 0.3); cab.scale.setScalar(0.55); cab.position.set(-S / 4, 0, -S / 4); g.remove(tent); g.add(cab); }
+    },
+    mine: (g, s) => {
+      const S = structSize(s), L = lv(s);
+      for (let k = 0; k < 6; k++) g.add(mesh(geo('DodecahedronGeometry', 0.7, 0), mat(0x7a746c), -S / 2 + 0.4 + (k % 3) * (S - 0.8) / 2, 0.45 + Math.floor(k / 3) * 0.55, -S / 2 + 0.5 + Math.floor(k / 3) * 0.2));
+      g.add(box(1.0, 0.9, 0.3, 0x0e0c0a, 0, 0.55, -S / 2 + 1.05));
+      for (const x of [-0.6, 0.6]) g.add(box(0.14, 1.3, 0.14, 0x6b4a2b, x, 0.65, -S / 2 + 1.15));
+      g.add(box(1.5, 0.16, 0.18, 0x6b4a2b, 0, 1.3, -S / 2 + 1.15));
+      g.add(box(0.5, 0.3, 0.38, 0x55555c, 0.6, 0.25, S / 4), cone(0.3, 0.35, 0xb07a4a, -0.7, 0.17, S / 4, 6));
+      if (L >= 2) { for (let k = 0; k < 4; k++) g.add(box(0.8, 0.05, 0.1, 0x5a3a20, 0, 0.03, -S / 2 + 1.4 + k * 0.32)); for (const x of [-0.25, 0.25]) g.add(box(0.05, 0.05, 1.4, 0x55555c, x, 0.08, -S / 2 + 1.9)); g.add(box(0.08, 1.4, 0.08, 0x2a2a2a, 0.95, 0.7, 0)); if (!previewing) { const gl = glowSprite(0xffc870, 1.6); gl.position.set(0.95, 1.4, 0); g.add(gl); } }
+      if (L >= 3) { for (const sx of [-1, 1]) { const leg = box(0.12, 2.8, 0.12, 0x6b4a2b, sx * 0.55 + S / 4, 1.35, -0.2); leg.rotation.z = sx * 0.2; g.add(leg); } const wh = cyl(0.45, 0.45, 0.08, 0x4a3220, S / 4, 2.6, -0.2, 12); wh.rotation.x = Math.PI / 2; g.add(wh); }
+    },
+    dock: (g, s) => {
+      const S = structSize(s), L = lv(s);
+      // Point the pier at the water.
+      let dir = [0, 1];
+      if (s.x != null) {
+        let best = -1;
+        for (const [dx, dz] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+          let n = 0;
+          for (let k = 0; k < S; k++) {
+            const tx = dx ? (dx > 0 ? s.x + S : s.x - 1) : s.x + k, ty = dz ? (dz > 0 ? s.y + S : s.y - 1) : s.y + k;
+            if (terrain[idx(tx, ty)] === T.WATER) n++;
+          }
+          if (n > best) { best = n; dir = [dx, dz]; }
+        }
+      }
+      const pier = new C.Group();
+      for (let k = 0; k < 4 + L * 2; k++) pier.add(box(1.1, 0.08, 0.36, 0x8a6338, 0, 0.2, S / 2 - 0.2 + k * 0.38));
+      for (let k = 0; k < 2 + L; k++) for (const x of [-0.5, 0.5]) pier.add(cyl(0.07, 0.07, 1.0, 0x5a3a20, x, -0.15, S / 2 + k * 0.75, 5));
+      if (L >= 3) { pier.add(box(0.7, 0.25, 1.6, 0x7a5232, 1.1, -0.02, S / 2 + 1.2), box(0.5, 0.08, 1.3, 0x5a3a20, 1.1, 0.12, S / 2 + 1.2)); }
+      pier.rotation.y = Math.atan2(dir[0], dir[1]);
+      g.add(pier);
+      const hut = new C.Group(); HOUSES.saltmere(hut, 0.2); hut.scale.setScalar(L >= 2 ? 0.6 : 0.42); hut.position.set(-dir[0] * 0.4, 0, -dir[1] * 0.4); hut.rotation.y = Math.atan2(dir[0], dir[1]); g.add(hut);
+      for (let k = 0; k < 3; k++) g.add(box(0.04, 0.9, 0.04, 0x8a6a3a, S / 2 - 0.3 - k * 0.2, 0.45, -S / 2 + 0.3));
+    },
+    guard_tower: (g, s) => {
+      const S = structSize(s), L = lv(s);
+      if (L === 1) {
+        for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { const leg = cyl(0.08, 0.1, 3.0, 0x7a5432, x * 0.5, 1.5, z * 0.5, 6); g.add(leg); }
+        g.add(box(1.4, 0.12, 1.4, 0x8a6338, 0, 3.0, 0));
+        for (const [x, z, w, d] of [[0, 0.68, 1.4, 0.06], [0, -0.68, 1.4, 0.06], [0.68, 0, 0.06, 1.4], [-0.68, 0, 0.06, 1.4]]) g.add(box(w, 0.6, d, 0x7a5432, x, 3.35, z));
+        roof(g, 1.5, 1.5, 0.7, 3.9, 0x5a3a20, null, { over: 0.1 });
+        for (const x of [-0.5, 0.5]) for (const x2 of [0]) g.add(box(0.05, 0.05, 0.05, 0x7a5432, x + x2, 0, 0));
+        for (let k = 0; k < 8; k++) g.add(box(0.5, 0.04, 0.04, 0x7a5432, 0, 0.35 + k * 0.33, 0.75));
+      } else {
+        const h = L === 2 ? 3.6 : 5.0, r = 0.55 + S * 0.15;
+        g.add(cyl(r, r + 0.12, h, 0x8a8478, 0, h / 2, 0, 10), cyl(r + 0.18, r + 0.18, 0.3, 0x7a746c, 0, h + 0.15, 0, 10));
+        for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; g.add(box(0.3, 0.4, 0.3, 0x8a8478, Math.cos(a) * (r + 0.1), h + 0.5, Math.sin(a) * (r + 0.1))); }
+        g.add(box(0.5, 0.9, 0.08, 0x3a2a1a, 0, 0.45, r + 0.04));
+        for (const y of [1.5, h - 0.8]) win(g, 0, y, r + 0.06, 0, { w: 0.16, h: 0.4, frame: 0x6a645e });
+        if (L >= 3) {
+          g.add(cone(r + 0.35, 1.4, 0x7a3530, 0, h + 1.4, 0, 10), cyl(0.03, 0.03, 1.0, 0x3a2a1a, 0, h + 2.4, 0, 4), box(0.03, 0.4, 0.6, 0xb0302a, 0, h + 2.7, 0.3));
+          for (const a of [0.8, -0.8]) { g.add(box(0.06, 0.4, 0.06, 0x2a2a2a, Math.sin(a) * (r + 0.1), 1.6, Math.cos(a) * (r + 0.1))); if (!previewing) { const gl = glowSprite(0xffa040, 1.8); gl.position.set(Math.sin(a) * (r + 0.15), 1.9, Math.cos(a) * (r + 0.15)); g.add(gl); } }
+        }
+      }
     },
   };
 
@@ -1392,17 +1745,17 @@ const Render3D = (() => {
   }
 
   function structModel(s) {
-    const def = STRUCTS[s.type], g = new C.Group(), crew = [];
+    const def = STRUCTS[s.type], g = new C.Group(), crew = [], size = structSize(s);
     if (!s.level) {
-      g.add(box(def.size - 0.1, 0.1, def.size - 0.1, 0x9a8a6a, 0, 0.05, 0));
-      scaffold(g, def.size);
+      g.add(box(size - 0.1, 0.1, size - 0.1, 0x9a8a6a, 0, 0.05, 0));
+      scaffold(g, size);
     } else {
-      STRUCT_MODELS[s.type](g);
-      if (s.pending) scaffold(g, def.size);
+      STRUCT_MODELS[s.type](g, s);
+      if (s.pending) scaffold(g, size);
       const toolKind = { lumber_camp: 'axe', mine: 'pickaxe', dock: 'rod', sawbench: 'hammer', furnace: 'hammer', anvil: 'hammer', campfire: null }[s.type];
       for (let k = 0; k < Math.min(s.workers || 0, 3); k++) {
         const a = worker(0x8a6a3a, toolKind);
-        const off = def.size * 0.5 + 0.5;
+        const off = size * 0.5 + 0.5;
         a.g.position.set(-0.6 + k * 0.6, 0, off);
         a.g.rotation.y = Math.PI;
         a.working = true; a.phase = k;
@@ -1413,7 +1766,7 @@ const Render3D = (() => {
           const a = worker(0x5a5f6a, 'spear');
           a.body.add(box(0.3, 0.32, 0.02, 0xa02a2a, 0, 0, 0.135));
           const ang = k / 4 * Math.PI * 2;
-          a.g.position.set(Math.cos(ang) * 0.9, 0, Math.sin(ang) * 0.9);
+          a.g.position.set(Math.cos(ang) * (size * 0.5 + 0.5), 0, Math.sin(ang) * (size * 0.5 + 0.5));
           a.g.rotation.y = ang + Math.PI / 2;
           g.add(a.g); crew.push(a);
         });
@@ -1421,7 +1774,8 @@ const Render3D = (() => {
     }
     const text = s.pending ? `${def.name} ${Math.floor(s.work / workNeeded(s) * 100)}%` : `${def.name}${s.level > 1 ? ' Lv' + s.level : ''}`;
     const label = makeLabel(text, { color: s.pending ? '#ffd27a' : '#ffe9a8', h: 0.3 });
-    label.position.y = def.size > 1 ? 2.6 : 1.7;
+    const box3 = new C.Box3().setFromObject(g);
+    label.position.y = Math.max(1.7, box3.max.y + 0.5);
     g.add(label);
     return { g, crew };
   }
@@ -1436,9 +1790,9 @@ const Render3D = (() => {
       if (cur) removeStruct(s.id);
       const def = STRUCTS[s.type];
       const { g, crew } = structModel(s);
-      const cx = s.x + (def.size - 1) / 2, cy = s.y + (def.size - 1) / 2;
+      const size = structSize(s), cx = s.x + (size - 1) / 2, cy = s.y + (size - 1) / 2;
       let h = 0;
-      for (const [x, y] of footprint(s.x, s.y, def.size)) h = Math.max(h, tileH[idx(x, y)]);
+      for (const [x, y] of footprint(s.x, s.y, size)) h = Math.max(h, tileH[idx(x, y)]);
       g.position.set(cx, h, cy);
       g.traverse(o => { o.userData.tile = idx(s.x, s.y); });
       scene.add(g);
@@ -1471,7 +1825,7 @@ const Render3D = (() => {
         const def = STRUCTS[buildMode.type];
         ghost = new C.Group();
         previewing = true;
-        STRUCT_MODELS[buildMode.type](ghost);
+        STRUCT_MODELS[buildMode.type](ghost, { type: buildMode.type, level: 1, size: def.size, x: buildMode.x, y: buildMode.y });
         previewing = false;
         const gm = new C.MeshBasicMaterial({ color: buildMode.valid ? 0x5aff7a : 0xff4a3a, transparent: true, opacity: 0.45, depthWrite: false });
         ghost.traverse(o => { if (o.isMesh) { o.material = gm; o.castShadow = false; } });
@@ -1738,7 +2092,7 @@ const Render3D = (() => {
     const it = interactTarget;
     if (it && it.kind !== 'monster' && !action) {
       let x = it.x, y = it.y, size = 0.55;
-      if (it.kind === 'struct') { const c = structCenter(it.s); x = c.x; y = c.y; size = STRUCTS[it.s.type].size * 0.7; }
+      if (it.kind === 'struct') { const c = structCenter(it.s); x = c.x; y = c.y; size = structSize(it.s) * 0.7; }
       interactMark.visible = true;
       interactMark.scale.setScalar(size / 0.55 * (1 + Math.sin(t * 6) * 0.06));
       interactMark.position.set(x, Math.max(gh(x, y), 0) + 0.06, y);

@@ -51,12 +51,37 @@ const noiseA = valueNoise(11), noiseB = valueNoise(12), noiseC = valueNoise(13);
 const fbm = (n, x, y) => 0.6 * n(x, y) + 0.3 * n(x * 2.1, y * 2.1) + 0.1 * n(x * 4.3, y * 4.3);
 
 // ------------------------------------------------------------ map design
+// Towns. `pc` is the square where the market and carriage stand; Stonedeep climbs the mountainside
+// in four terraces (heights listed from the bottom), joined by a central stairway.
 const TOWN_DEFS = {
-  ironhold:  { x: 200, y: 170, hw: 14, hh: 10, h: 0.5, margin: 4, walls: true },
-  stonedeep: { x: 210, y: 62,  hw: 8,  hh: 6,  h: 1.8, margin: 10 },
-  saltmere:  { x: 118, y: 272, hw: 9,  hh: 5,  h: 0.35, margin: 4 },
-  thornwood: { x: 62,  y: 186, hw: 8,  hh: 6,  h: 0.5, margin: 4 },
-  ratsnest:  { x: 352, y: 238, hw: 7,  hh: 5,  h: 0.6, margin: 4 },
+  ironhold:  { x: 200, y: 170, hw: 20, hh: 14, h: 0.5, margin: 4, walls: true },
+  stonedeep: { x: 210, y: 74,  hw: 11, hh: 12, h: 1.2, margin: 3, terraces: [1.2, 2.8, 4.4, 6.0] },
+  saltmere:  { x: 118, y: 270, hw: 13, hh: 7,  h: 0.35, margin: 4 },
+  thornwood: { x: 62,  y: 186, hw: 12, hh: 9,  h: 0.5, margin: 4 },
+  ratsnest:  { x: 352, y: 238, hw: 10, hh: 8,  h: 0.6, margin: 4 },
+};
+for (const id in TOWN_DEFS) {
+  const d = TOWN_DEFS[id];
+  d.pc = d.terraces ? { x: d.x, y: d.y + d.hh - 3 } : { x: d.x, y: d.y };
+  d.arrive = d.terraces ? { x: d.x + 2, y: d.y + d.hh - 2 } : { x: d.x + 3, y: d.y - 1 };
+}
+// Height of a town's ground; terraced towns step up the hill, with stairs up the middle.
+function townHeight(t, x, y) {
+  if (!t.terraces) return t.h;
+  const n = t.terraces.length, rowD = (2 * t.hh + 1) / n;
+  const f = clamp((t.y + t.hh + 0.5 - y) / rowD, 0, n - 0.001);
+  const lv = Math.floor(f), frac = f - lv;
+  let h = t.terraces[lv];
+  if (Math.abs(x - t.x) <= 1.6 && lv < n - 1 && frac > 0.55) h = lerp(h, t.terraces[lv + 1], smooth((frac - 0.55) / 0.45));
+  return h;
+}
+const townLandmarks = [];   // { town, kind, x, y, w, h }
+const LANDMARKS = {
+  ironhold:  { kind: 'keep',  dx: 6,  dy: -12, w: 7, h: 6 },
+  stonedeep: { kind: 'mine',  dx: 3,  dy: -12, w: 5, h: 3 },
+  thornwood: { kind: 'lodge', dx: -4, dy: -8,  w: 8, h: 4 },
+  ratsnest:  { kind: 'den',   dx: 3,  dy: -7,  w: 6, h: 4 },
+  saltmere:  { kind: 'lighthouse', w: 3, h: 3 },
 };
 
 // Where a new game begins: a quiet clearing by a pond, south-west of Ironhold.
@@ -94,8 +119,8 @@ const SEA_FISH = [['pike', 0.55], ['trout', 0.45]];
 const RIVER_FISH = [['trout', 0.7], ['minnow', 0.3]];
 
 const ROADS = [
-  [[200, 170], [200, 140], [206, 110], [210, 88], [210, 62]],
-  [[210, 62], [212, 40], [214, 16]],
+  [[200, 170], [200, 140], [206, 110], [210, 92], [210, 74]],
+  [[210, 74], [210, 58], [212, 40], [214, 16]],
   [[200, 170], [160, 172], [120, 180], [90, 184], [62, 186]],
   [[200, 170], [196, 205], [170, 240], [140, 262], [118, 272]],
   [[200, 170], [250, 172], [280, 196], [320, 220], [352, 238]],
@@ -184,13 +209,14 @@ function heightFn(x, y) {
   if (dr < 3.2) h = lerp(h, -0.7, smooth(clamp((3.2 - dr) / 1.6, 0, 1)));
   if (h > -0.05) {
     const d = roadDist(x, y);
-    if (d < 3.4) h = lerp(h, clamp(h, 0.2, 2.0), d < 2 ? 1 : smooth((3.4 - d) / 1.4));
+    const capH = Math.hypot(x - TOWN_DEFS.stonedeep.x, y - TOWN_DEFS.stonedeep.y) < 32 ? 7.5 : 2.0;
+    if (d < 3.4) h = lerp(h, clamp(h, 0.2, capH), d < 2 ? 1 : smooth((3.4 - d) / 1.4));
   }
   for (const id in TOWN_DEFS) {
     const t = TOWN_DEFS[id];
     const dx = Math.max(0, Math.abs(x - t.x) - t.hw), dy = Math.max(0, Math.abs(y - t.y) - t.hh);
     const dd = Math.hypot(dx, dy);
-    if (dd < t.margin) h = lerp(h, t.h, smooth(1 - dd / t.margin));
+    if (dd < t.margin) h = lerp(h, townHeight(t, clamp(x, t.x - t.hw, t.x + t.hw), clamp(y, t.y - t.hh, t.y + t.hh)), smooth(1 - dd / t.margin));
   }
   return h;
 }
@@ -243,7 +269,9 @@ function generateWorld() {
     else if (town) {
       const d = TOWN_DEFS[town];
       const edge = Math.abs(x - d.x) === d.hw || Math.abs(y - d.y) === d.hh;
-      t = d.walls && edge && tileRoad[i] > 1.8 ? T.WALL : T.FLOOR;
+      const k = y * (W + 1) + x;
+      const spread = Math.max(cornerH[k], cornerH[k + 1], cornerH[k + W + 1], cornerH[k + W + 2]) - Math.min(cornerH[k], cornerH[k + 1], cornerH[k + W + 1], cornerH[k + W + 2]);
+      t = (d.walls && edge && tileRoad[i] > 1.8) || (d.terraces && spread > 0.6 && Math.abs(x - d.x) > 1) ? T.WALL : T.FLOOR;
     } else if (tileRoad[i] < 1.3) t = h < -0.05 ? T.BRIDGE : T.ROAD;
     else if (Math.hypot(x - PEAK.x, y - PEAK.y) < 4.6) t = T.PEAK;
     else if (tileTrail[i] < 1.45) t = h > 7 ? T.PEAK : T.ROAD;
@@ -255,23 +283,8 @@ function generateWorld() {
     terrain[i] = t;
   }
 
-  // Town services and decorative houses.
-  for (const id in TOWN_DEFS) {
-    const d = TOWN_DEFS[id];
-    services.set(idx(d.x - 3, d.y - 3), { type: 'market', town: id });
-    services.set(idx(d.x + 3, d.y - 3), { type: 'carriage', town: id });
-    const tr = mulberry32(id.length * 977 + d.x);
-    for (let y = d.y - d.hh + 2; y <= d.y + d.hh - 3; y += 4) {
-      for (let x = d.x - d.hw + 2; x <= d.x + d.hw - 3; x += 4) {
-        if (Math.abs(x + 0.5 - d.x) < 4 || Math.abs(y + 0.5 - d.y) < 3.5) continue;
-        if (tr() < 0.25) continue;
-        const tiles = [idx(x, y), idx(x + 1, y), idx(x, y + 1), idx(x + 1, y + 1)];
-        if (tiles.some(t => services.has(t) || terrain[t] !== T.FLOOR)) continue;
-        tiles.forEach(t => townBlocks.add(t));
-        townHouses.push({ x, y, town: id, rot: Math.floor(tr() * 4) });
-      }
-    }
-  }
+  // Town squares, landmarks and streets of houses.
+  for (const id in TOWN_DEFS) layTown(id, TOWN_DEFS[id]);
 
   // Resources: at most one per 2x2 cell, so nothing forms big clumps.
   const capital = TOWN_DEFS.ironhold;
@@ -544,7 +557,7 @@ function decorateWorld(r) {
         const j = idx(xx, yy);
         if (services.has(j) || (townBlocks.has(j) && !(xx === x && yy === y))) return false;
       }
-      return !(x === d.x + 3 && y === d.y - 1);
+      return !(x === d.arrive.x && y === d.arrive.y);
     };
     for (const kind of extras[id]) {
       for (let tries = 0; tries < 60; tries++) {
@@ -591,6 +604,80 @@ function decorateWorld(r) {
     if (wet === 3) {
       townProps.push({ kind: 'boat', x: dockX - 2, y, rot: 0, town: 'saltmere' });
       townProps.push({ kind: 'boat', x: dockX + 2, y: y + 1, rot: Math.PI, town: 'saltmere' });
+    }
+  }
+}
+
+// Lay out a town: market square, a landmark, then three-by-three house lots along the streets.
+function layTown(id, d) {
+  const tr = mulberry32(id.length * 977 + d.x);
+  const inRect = (x, y, m = 0) => Math.abs(x - d.x) <= d.hw - m && Math.abs(y - d.y) <= d.hh - m;
+  services.set(idx(d.pc.x - (d.terraces ? 4 : 3), d.pc.y - (d.terraces ? 1 : 3)), { type: 'market', town: id });
+  services.set(idx(d.pc.x + (d.terraces ? 4 : 3), d.pc.y - (d.terraces ? 1 : 3)), { type: 'carriage', town: id });
+  const street = (x, y) => d.terraces ? Math.abs(x - d.x) <= 2 : Math.abs(x - d.x) <= 1 || Math.abs(y - d.y) <= 1;
+  const big = id === 'ironhold';
+  const plaza = (x, y) => Math.abs(x - d.pc.x) <= (big ? 5 : 4) && Math.abs(y - d.pc.y) <= (big ? 4 : 2);
+  const reserved = new Set();
+  const flat = (x, y, w, h) => {
+    let lo = Infinity, hi = -Infinity;
+    for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) {
+      const i = idx(xx, yy);
+      if (terrain[i] !== T.FLOOR || services.has(i) || townBlocks.has(i) || reserved.has(i)) return false;
+      lo = Math.min(lo, tileH[i]); hi = Math.max(hi, tileH[i]);
+    }
+    return hi - lo < 0.2;
+  };
+
+  // The landmark.
+  const lm = LANDMARKS[id];
+  if (lm.kind === 'lighthouse') {
+    for (let r = 0; r < 12; r++) {
+      let done = false;
+      for (let k = 0; k < Math.max(1, r * 8) && !done; k++) {
+        const a = k / Math.max(1, r * 8) * Math.PI * 2;
+        const x = Math.round(d.x - d.hw + 3 + Math.cos(a) * r), y = Math.round(d.y + d.hh + 3 + Math.sin(a) * r);
+        let ok = true, wet = false;
+        for (let yy = y; yy < y + 3; yy++) for (let xx = x; xx < x + 3; xx++) {
+          const t = terrain[idx(xx, yy)];
+          if (t !== T.SAND && t !== T.GRASS) ok = false;
+          if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([p, q]) => terrain[idx(xx + p, yy + q)] === T.WATER)) wet = true;
+        }
+        if (ok && wet) {
+          for (let yy = y; yy < y + 3; yy++) for (let xx = x; xx < x + 3; xx++) { nodes.delete(idx(xx, yy)); townBlocks.add(idx(xx, yy)); }
+          townLandmarks.push({ town: id, kind: 'lighthouse', x, y, w: 3, h: 3 });
+          done = true;
+        }
+      }
+      if (done) break;
+    }
+  } else {
+    const x = d.x + lm.dx, y = d.y + lm.dy;
+    if (flat(x, y, lm.w, lm.h)) {
+      for (let yy = y; yy < y + lm.h; yy++) for (let xx = x; xx < x + lm.w; xx++) townBlocks.add(idx(xx, yy));
+      townLandmarks.push({ town: id, kind: lm.kind, x, y, w: lm.w, h: lm.h });
+    }
+  }
+
+  // House lots, packed with one-tile alleys between them.
+  for (let y = d.y - d.hh + 1; y <= d.y + d.hh - 3; y++) {
+    for (let x = d.x - d.hw + 1; x <= d.x + d.hw - 3; x++) {
+      if (!inRect(x, y, 1) && !d.terraces) continue;
+      let ok = flat(x, y, 3, 3);
+      for (let yy = y; yy < y + 3 && ok; yy++) for (let xx = x; xx < x + 3 && ok; xx++) if (street(xx, yy) || plaza(xx, yy)) ok = false;
+      for (let yy = y - 1; yy < y + 4 && ok; yy++) for (let xx = x - 1; xx < x + 4 && ok; xx++) if (townBlocks.has(idx(xx, yy))) ok = false;
+      if (ok && d.terraces) {
+        // Houses back onto the terrace wall above, leaving a walkway in front.
+        for (let xx = x; xx < x + 3; xx++) if (inRect(xx, y - 1) && terrain[idx(xx, y - 1)] !== T.WALL) ok = false;
+      }
+      if (!ok) continue;
+      if (tr() < 0.15) { for (let yy = y; yy < y + 3; yy++) for (let xx = x; xx < x + 3; xx++) reserved.add(idx(xx, yy)); continue; }
+      const cx = x + 1, cy = y + 1;
+      let rot;
+      if (d.terraces) rot = 0;
+      else if (Math.abs(cx - d.x) / d.hw < Math.abs(cy - d.y) / d.hh) rot = cx < d.x ? Math.PI / 2 : -Math.PI / 2;
+      else rot = cy < d.y ? 0 : Math.PI;
+      for (let yy = y; yy < y + 3; yy++) for (let xx = x; xx < x + 3; xx++) townBlocks.add(idx(xx, yy));
+      townHouses.push({ x, y, w: 3, h: 3, rot, town: id, seed: tr() });
     }
   }
 }

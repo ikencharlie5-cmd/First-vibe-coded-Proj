@@ -232,10 +232,13 @@ function footprint(x, y, size) {
   for (let dy = 0; dy < size; dy++) for (let dx = 0; dx < size; dx++) out.push([x + dx, y + dy]);
   return out;
 }
-const structCenter = s => ({ x: s.x + (structDef(s).size - 1) / 2, y: s.y + (structDef(s).size - 1) / 2 });
+// Buildings placed before footprints grew keep their old size.
+const LEGACY_SIZE = { storehouse: 2, house: 2, lumber_camp: 2, dock: 2, mine: 2, guard_tower: 1 };
+const structSize = s => s.size || LEGACY_SIZE[s.type] || STRUCTS[s.type].size;
+const structCenter = s => ({ x: s.x + (structSize(s) - 1) / 2, y: s.y + (structSize(s) - 1) / 2 });
 function indexStructs() {
   structIndex.clear();
-  for (const s of state.structs) for (const [x, y] of footprint(s.x, s.y, structDef(s).size)) structIndex.set(idx(x, y), s);
+  for (const s of state.structs) for (const [x, y] of footprint(s.x, s.y, structSize(s))) structIndex.set(idx(x, y), s);
 }
 const structById = id => state.structs.find(s => s.id === id);
 const workNeeded = s => Math.round(structDef(s).work * (1 + 0.6 * ((s.pending || 1) - 1)));
@@ -258,7 +261,7 @@ function upgradeCost(s) {
 
 // Nodes of a resource type close enough for a camp's workers to use.
 function richness(s, res) {
-  const size = STRUCTS[s.type].size, cx = s.x + (size - 1) / 2, cy = s.y + (size - 1) / 2, r = EMPIRE.gatherRadius;
+  const size = structSize(s), cx = s.x + (size - 1) / 2, cy = s.y + (size - 1) / 2, r = EMPIRE.gatherRadius;
   let n = 0;
   for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
     if (x < 0 || y < 0 || x >= W || y >= H) continue;
@@ -323,7 +326,7 @@ function updateBuildMode() {
   const def = STRUCTS[buildMode.type];
   buildMode.info = '';
   if (def.gather) {
-    const fake = { type: buildMode.type, x: buildMode.x, y: buildMode.y };
+    const fake = { type: buildMode.type, x: buildMode.x, y: buildMode.y, size: def.size };
     const res = Object.keys(RESOURCES).filter(r => RESOURCES[r].skill === def.gather);
     buildMode.info = res.map(r => [richness(fake, r), RESOURCES[r].name.toLowerCase()]).filter(([n]) => n).map(([n, name]) => `${n} ${name}`).join(', ') || 'nothing to gather';
   }
@@ -334,7 +337,7 @@ function placeStructure() {
   if (!buildMode.valid) { log(`Can't build here: ${buildMode.reason}.`, 'warn'); return; }
   const def = STRUCTS[buildMode.type];
   payAll(def.cost, nearStorehouse(buildMode.x, buildMode.y));
-  const s = { id: state.nextStructId++, type: buildMode.type, x: buildMode.x, y: buildMode.y, level: 0, pending: 1, work: 0, workers: 0, acc: 0 };
+  const s = { id: state.nextStructId++, type: buildMode.type, x: buildMode.x, y: buildMode.y, size: def.size, level: 0, pending: 1, work: 0, workers: 0, acc: 0 };
   if (def.guards) s.guards = [];
   if (def.station) s.on = true;
   state.structs.push(s);
@@ -990,7 +993,7 @@ function travel(from, to) {
   const fee = carriageFee(from, to);
   if (state.gold < fee) { log(`The carriage costs ${fee} gold.`, 'warn'); return; }
   state.gold -= fee;
-  state.px = TOWN_DEFS[to].x + 3; state.py = TOWN_DEFS[to].y - 1;
+  state.px = TOWN_DEFS[to].arrive.x; state.py = TOWN_DEFS[to].arrive.y;
   action = null;
   closePanel();
   log(`You ride the carriage to ${TOWNS[to].name}.`, 'good');
@@ -1276,7 +1279,7 @@ function drawMinimap() {
   g.drawImage(mapImage, -state.px - 0.5, -state.py - 0.5);
   for (const s of state.structs) {
     g.fillStyle = s.level ? '#ffd84a' : '#c9a86a';
-    const sz = structDef(s).size;
+    const sz = structSize(s);
     g.fillRect(s.x - state.px - 0.5, s.y - state.py - 0.5, sz, sz);
   }
   for (const m of monsters) {
@@ -1695,7 +1698,7 @@ function init() {
   if (!loaded) state = newState();
   marketInit();
   indexStructs();
-  if (collides(state.px, state.py, Date.now())) { state.px = TOWN_DEFS.ironhold.x; state.py = TOWN_DEFS.ironhold.y + 3; }
+  if (collides(state.px, state.py, Date.now())) { const p = respawnPoint(); state.px = p.x; state.py = p.y; }
   state.hp = clamp(state.hp, 1, maxHp());
   buildMapImage();
 
