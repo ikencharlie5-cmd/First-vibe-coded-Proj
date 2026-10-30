@@ -1,67 +1,77 @@
 # Ironhold: a 3D medieval refinement empire
 
-A single-player browser game. You start as one peasant with a worn axe and grow into
-a medieval industrial empire: gather, refine, sell, hire workers, build works, and
-fight off the monsters and bandits of the wilds.
+A single-player browser game. You arrive in the capital with nothing but the clothes on
+your back. Gather sticks and stones, craft your first tools, build your own settlement
+anywhere in the world, hire workers, trade between towns, and grow into a medieval
+industrial empire.
 
 The world is a low-poly 3D landscape drawn with [three.js](https://threejs.org/), which is
 bundled in `js/lib/`. It's plain HTML, CSS and JavaScript with no build step, so it runs on
-GitHub Pages or by opening `index.html` in a browser.
+GitHub Pages or by opening `index.html` in a browser. It's made for keyboard and mouse.
 
-## How to play
+## Controls
 
-| Key | Action |
+| Input | Action |
 | --- | --- |
-| Click / tap | Walk there. Click a tree, rock, building or monster to go and use it. |
-| Arrows / WASD | Move one step. Walk into things to interact with them. |
-| Mouse wheel, + / - | Zoom |
+| W A S D / arrows | Walk (relative to the camera) |
+| Shift | Run |
+| Drag the mouse | Swing the camera around you |
+| Mouse wheel | Zoom |
+| E or click | Use what's in front of you: gather, attack, trade, build, open a building |
 | F | Eat food |
-| C | Cycle combat style (Attack / Strength / Defence) |
-| E | Open the empire panel |
-| ? | Help and legend |
-| Esc | Close a panel |
+| X | Cycle combat style (Attack / Strength / Defence) |
+| B | Build menu |
+| C | Hand crafting |
+| I | Pack and gear |
+| K | Skills |
+| G | Empire overview |
+| M | World map |
+| H | Help |
+| Esc | Close a panel or cancel placing a building |
 
-Hover over things to see what they are. On phones, tap to move or use the on-screen d-pad.
+## How it plays
 
-**The loop:**
-1. **Gather** from trees, rocks (the coloured nuggets show the ore) and rippling fishing spots.
-   The action repeats until you move. Woodcutting, Mining and Fishing level up as you go.
-2. **Refine** in town: the Sawbench (logs to planks), Furnace (ore to bars),
-   Anvil (bars to swords, shields, helms, platebodies, axes and pickaxes), and Cook fire.
-   Carpentry, Smelting, Smithing and Cooking are separate skills.
-3. **Sell** at the Market. Prices drift every 30 seconds, dumping a lot of one item
-   pushes its price down, and random royal orders or gluts swing prices hard.
-4. **Build** at the Guild Hall: camps out in the wilds gather for you, and works inside the
-   walls refine for you. Each one appears on its labelled plot, with workers and guards you can see. Workers draw wages every minute.
-5. **Defend:** bandit threat rises over time, and raids steal from camp stockpiles.
-   Arm guards with swords you smith (a higher sword tier makes a stronger guard), and kill bandits to lower the threat.
+1. **Start from nothing.** Gather sticks from bushes and stones from loose stones, then
+   hand-craft a stone axe and pickaxe.
+2. **Build your settlement wherever you like.** Pick a structure from the build menu,
+   click the ground to place it, then hammer it together with E. This trains
+   **Construction**, which unlocks bigger buildings: workbench, campfire, sawbench,
+   storehouse, furnace, cottage, anvil, lumber camp, fishing dock, mine and guard tower.
+   Every building can be upgraded to level 3.
+3. **Refine.** Saw logs into planks, smelt ore into bars, smith metal tools, weapons and
+   armour, and cook fish. Better tools gather faster.
+4. **Automate.** Cottages give beds for workers. Lumber camps, mines and docks gather from
+   the resources around them, so where you build matters. Stations with workers refine
+   automatically. Everything flows through your storehouse, and work continues while
+   you're away (up to 12 hours).
+5. **Trade.** Five towns, each with its own prices and goods:
+   - **Ironhold**, the capital, has fair prices for everything.
+   - **Stonedeep**, a mining town in the northern mountains, is hungry for food and timber.
+   - **Saltmere**, a fishing village on the south coast, pays well for planks and metal.
+   - **Thornwood**, a lodge in the western forest, is rich in timber and short of metal.
+   - **Rat's Nest**, a bandit black market in the eastern badlands, pays a fortune for rare loot.
+   Prices drift, and towns post big orders and gluts. Once you've visited a town, its
+   carriage can take you back.
+6. **Fight and defend.** Goblins and wolves roam the meadows and forest, bandits hold the
+   badlands, and ogres haunt the frozen highlands past Stonedeep. Monster drops (wolf
+   pelts, star fragments and more) can't be gathered any other way. Bandits raid camps and
+   storehouses, so smith swords and build guard towers.
 
-**Combat:** goblins and wolves roam near town, bandits further out, and ogres in the deep
-wilds. Attack, Strength, Defence and Hitpoints level from fighting. Gear you smith yourself
-makes you stronger. Some materials only come from monsters: wolf pelts are needed for
-platebodies, and ogre star fragments are smelted into starmetal, the top tier.
-
-**Saving:** progress saves to your browser's localStorage every 15 seconds and when you
-leave the page. When you come back, your workers' output and wages for the time you were
-away are calculated (up to 12 hours). Camp stockpiles have a cap, so check in to collect.
+Progress saves to your browser's localStorage every 15 seconds and when you leave.
 
 ## Play it on GitHub Pages
 
-1. Merge this branch into your default branch (`main`). Or, in step 4, pick this branch instead.
-2. On GitHub, open the repository and go to **Settings → Pages** (in the left sidebar under "Code and automation").
-3. Under **Build and deployment → Source**, choose **Deploy from a branch**.
-4. Under **Branch**, select `main` and the `/ (root)` folder, then click **Save**.
-5. Wait a minute or two. The page shows your URL, which looks like
-   `https://<your-username>.github.io/<repository-name>/`.
-   You can also watch the deploy in the repository's **Actions** tab.
+1. On GitHub, open the repository and go to **Settings → Pages**.
+2. Under **Build and deployment → Source**, choose **Deploy from a branch**.
+3. Pick the branch with the game and the `/ (root)` folder, then click **Save**.
+4. After a minute or two the game is live at `https://<your-username>.github.io/<repository-name>/`.
 
-Every push to that branch redeploys automatically.
-
-Note: on a free GitHub plan, Pages only works for **public** repositories.
+Every push to that branch redeploys automatically. On a free GitHub plan, Pages only works
+for public repositories.
 
 ## Play locally
 
-Open `index.html` in any modern browser. Or serve the folder:
+Open `index.html` in any modern browser, or serve the folder:
 
 ```bash
 python3 -m http.server 8000
@@ -71,12 +81,10 @@ then visit http://localhost:8000.
 
 ## Code layout
 
-- `index.html`: page structure
-- `style.css`: layout and UI styling
-- `js/data.js`: all tunable game data (items, recipes, monsters, buildings, balance numbers)
-- `js/game.js`: world generation, game loop, combat, market, empire simulation, click-to-move, saving and UI
-- `js/render3d.js`: the 3D world: terrain, trees, rocks, buildings, characters, effects and camera
+- `index.html`: page structure and HUD
+- `style.css`: HUD and panel styling
+- `js/data.js`: all tunable game data (items, recipes, monsters, buildings, towns, balance numbers)
+- `js/world.js`: the hand-designed map: mountains, rivers, lakes, coast, roads, towns and resource placement
+- `js/game.js`: game logic: movement, gathering, crafting, building, combat, markets, workers, raids, saving and UI panels
+- `js/render3d.js`: the 3D world: terrain, water, trees and rocks, buildings, characters, effects and the orbit camera
 - `js/lib/three.min.js`: three.js r149 (MIT licence, see `js/lib/THREE-LICENSE`)
-
-Most balancing happens in `js/data.js`. The `EMPIRE` object there holds worker rates, wages,
-caps and raid timing.

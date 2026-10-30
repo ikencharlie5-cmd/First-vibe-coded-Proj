@@ -1,18 +1,20 @@
-// Static game data: items, resources, recipes, monsters, buildings.
+// Static game data: skills, items, recipes, monsters, structures, towns and balance numbers.
 'use strict';
 
 const SKILLS = [
-  { id: 'attack',      name: 'Attack',      group: 'combat' },
-  { id: 'strength',    name: 'Strength',    group: 'combat' },
-  { id: 'defence',     name: 'Defence',     group: 'combat' },
-  { id: 'hitpoints',   name: 'Hitpoints',   group: 'combat' },
-  { id: 'woodcutting', name: 'Woodcutting', group: 'gathering' },
-  { id: 'mining',      name: 'Mining',      group: 'gathering' },
-  { id: 'fishing',     name: 'Fishing',     group: 'gathering' },
-  { id: 'carpentry',   name: 'Carpentry',   group: 'refining' },
-  { id: 'smelting',    name: 'Smelting',    group: 'refining' },
-  { id: 'smithing',    name: 'Smithing',    group: 'refining' },
-  { id: 'cooking',     name: 'Cooking',     group: 'refining' },
+  { id: 'attack',       name: 'Attack',       group: 'combat' },
+  { id: 'strength',     name: 'Strength',     group: 'combat' },
+  { id: 'defence',      name: 'Defence',      group: 'combat' },
+  { id: 'hitpoints',    name: 'Hitpoints',    group: 'combat' },
+  { id: 'woodcutting',  name: 'Woodcutting',  group: 'gathering' },
+  { id: 'mining',       name: 'Mining',       group: 'gathering' },
+  { id: 'fishing',      name: 'Fishing',      group: 'gathering' },
+  { id: 'construction', name: 'Construction', group: 'building' },
+  { id: 'crafting',     name: 'Crafting',     group: 'building' },
+  { id: 'carpentry',    name: 'Carpentry',    group: 'refining' },
+  { id: 'smelting',     name: 'Smelting',     group: 'refining' },
+  { id: 'smithing',     name: 'Smithing',     group: 'refining' },
+  { id: 'cooking',      name: 'Cooking',      group: 'refining' },
 ];
 
 const MAX_LEVEL = 60;
@@ -20,6 +22,9 @@ const MAX_LEVEL = 60;
 function xpForLevel(l) { return l <= 1 ? 0 : Math.round(40 * Math.pow(l - 1, 1.9)); }
 
 const ITEMS = {
+  stick:          { name: 'Stick',          value: 1 },
+  stone:          { name: 'Stone',          value: 2 },
+
   pine_log:       { name: 'Pine log',       value: 5 },
   oak_log:        { name: 'Oak log',        value: 14 },
   ironwood_log:   { name: 'Ironwood log',   value: 30 },
@@ -51,10 +56,13 @@ const ITEMS = {
   ogre_tusk:      { name: 'Ogre tusk',      value: 90,  rare: true },
   star_fragment:  { name: 'Star fragment',  value: 160, rare: true },
 
-  // Starting tools
-  worn_axe:       { name: 'Worn axe',       value: 2, tool: 'axe',     tier: 0, req: 1 },
-  worn_pickaxe:   { name: 'Worn pickaxe',   value: 2, tool: 'pickaxe', tier: 0, req: 1 },
-  fishing_rod:    { name: 'Fishing rod',    value: 8, tool: 'rod',     tier: 0, req: 1 },
+  // Hand-made and workbench gear
+  stone_axe:      { name: 'Stone axe',      value: 5,   tool: 'axe',     tier: 0, req: 1 },
+  stone_pickaxe:  { name: 'Stone pickaxe',  value: 5,   tool: 'pickaxe', tier: 0, req: 1 },
+  fishing_rod:    { name: 'Fishing rod',    value: 12,  tool: 'rod',     tier: 0, req: 1 },
+  wooden_club:    { name: 'Wooden club',    value: 10,  slot: 'weapon',  tier: 0, req: 1, stats: { acc: 4, str: 3 } },
+  satchel:        { name: 'Satchel',        value: 60,  pack: 25 },
+  leather_pack:   { name: 'Leather pack',   value: 180, pack: 60 },
 };
 
 // Metal tiers used for smelting + smithing.
@@ -77,46 +85,48 @@ const GEAR = [
 const SLOT_SKILL = { weapon: 'attack', shield: 'defence', head: 'defence', body: 'defence' };
 const TOOL_SKILL = { axe: 'woodcutting', pickaxe: 'mining', rod: 'fishing' };
 
-// Gatherable map nodes.
+// Gatherable map nodes. Bushes and loose stones need no tool and no skill.
 const RESOURCES = {
-  pine:     { name: 'Pine tree',     skill: 'woodcutting', level: 1,  xp: 8,  item: 'pine_log',     ch: 't', cls: 'pine',     deplete: 0.25, respawn: 8,  tool: 'axe' },
-  oak:      { name: 'Oak tree',      skill: 'woodcutting', level: 10, xp: 18, item: 'oak_log',      ch: 'T', cls: 'oak',      deplete: 0.18, respawn: 15, tool: 'axe' },
-  ironwood: { name: 'Ironwood tree', skill: 'woodcutting', level: 25, xp: 40, item: 'ironwood_log', ch: 'Y', cls: 'ironwood', deplete: 0.12, respawn: 30, tool: 'axe' },
-  copper:   { name: 'Copper rock',   skill: 'mining',      level: 1,  xp: 9,  item: 'copper_ore',   ch: '*', cls: 'copper',   deplete: 0.35, respawn: 6,  tool: 'pickaxe' },
-  iron:     { name: 'Iron rock',     skill: 'mining',      level: 10, xp: 20, item: 'iron_ore',     ch: '*', cls: 'iron',     deplete: 0.35, respawn: 12, tool: 'pickaxe' },
-  coal:     { name: 'Coal rock',     skill: 'mining',      level: 20, xp: 30, item: 'coal',         ch: '*', cls: 'coal',     deplete: 0.3,  respawn: 20, tool: 'pickaxe' },
-  minnow:   { name: 'Minnow shoal',  skill: 'fishing',     level: 1,  xp: 6,  item: 'raw_minnow',   ch: '%', cls: 'fish1',    deplete: 0,    respawn: 0,  tool: 'rod' },
-  trout:    { name: 'Trout pool',    skill: 'fishing',     level: 10, xp: 15, item: 'raw_trout',    ch: '%', cls: 'fish2',    deplete: 0,    respawn: 0,  tool: 'rod' },
-  pike:     { name: 'Pike waters',   skill: 'fishing',     level: 20, xp: 28, item: 'raw_pike',     ch: '%', cls: 'fish3',    deplete: 0,    respawn: 0,  tool: 'rod' },
+  bush:     { name: 'Bush',          skill: null,          level: 1,  xp: 0,  item: 'stick',        deplete: 1,    respawn: 25, time: 1000 },
+  pebbles:  { name: 'Loose stones',  skill: null,          level: 1,  xp: 0,  item: 'stone',        deplete: 1,    respawn: 25, time: 1000 },
+  pine:     { name: 'Pine tree',     skill: 'woodcutting', level: 1,  xp: 8,  item: 'pine_log',     deplete: 0.25, respawn: 10, tool: 'axe' },
+  oak:      { name: 'Oak tree',      skill: 'woodcutting', level: 10, xp: 18, item: 'oak_log',      deplete: 0.18, respawn: 18, tool: 'axe' },
+  ironwood: { name: 'Ironwood tree', skill: 'woodcutting', level: 25, xp: 40, item: 'ironwood_log', deplete: 0.12, respawn: 30, tool: 'axe' },
+  copper:   { name: 'Copper rock',   skill: 'mining',      level: 1,  xp: 9,  item: 'copper_ore',   deplete: 0.3,  respawn: 8,  tool: 'pickaxe', stone: 0.25 },
+  iron:     { name: 'Iron rock',     skill: 'mining',      level: 10, xp: 20, item: 'iron_ore',     deplete: 0.3,  respawn: 14, tool: 'pickaxe', stone: 0.25 },
+  coal:     { name: 'Coal rock',     skill: 'mining',      level: 20, xp: 30, item: 'coal',         deplete: 0.3,  respawn: 20, tool: 'pickaxe', stone: 0.25 },
+  minnow:   { name: 'Minnow shoal',  skill: 'fishing',     level: 1,  xp: 6,  item: 'raw_minnow',   deplete: 0,    respawn: 0,  tool: 'rod' },
+  trout:    { name: 'Trout pool',    skill: 'fishing',     level: 10, xp: 15, item: 'raw_trout',    deplete: 0,    respawn: 0,  tool: 'rod' },
+  pike:     { name: 'Pike waters',   skill: 'fishing',     level: 20, xp: 28, item: 'raw_pike',     deplete: 0,    respawn: 0,  tool: 'rod' },
 };
 
-const STATIONS = {
-  market:  { name: 'Market',     ch: '$', desc: 'Buy and sell goods. Prices drift over time.' },
-  sawmill: { name: 'Sawbench',   ch: 'S', skill: 'carpentry', desc: 'Saw logs into planks.' },
-  furnace: { name: 'Furnace',    ch: 'F', skill: 'smelting',  desc: 'Smelt ore into bars.' },
-  anvil:   { name: 'Anvil',      ch: 'A', skill: 'smithing',  desc: 'Smith bars into tools, weapons and armour.' },
-  range:   { name: 'Cook fire',  ch: 'R', skill: 'cooking',   desc: 'Cook raw fish into food.' },
-  hall:    { name: 'Guild Hall', ch: 'H', desc: 'Manage your camps, works, workers and guards.' },
-};
+// Which station each crafting skill needs. Recipes marked `hand` can be made anywhere.
+const SKILL_STATION = { crafting: 'workbench', carpentry: 'sawbench', smelting: 'furnace', smithing: 'anvil', cooking: 'campfire' };
 
-// Recipes keyed by id.
 const RECIPES = {};
 function addRecipe(r) { RECIPES[r.id] = r; }
+
+addRecipe({ id: 'stone_axe',     skill: 'crafting', level: 1,  xp: 10, hand: true, inputs: { stick: 1, stone: 2 }, outputs: { stone_axe: 1 } });
+addRecipe({ id: 'stone_pickaxe', skill: 'crafting', level: 1,  xp: 10, hand: true, inputs: { stick: 1, stone: 2 }, outputs: { stone_pickaxe: 1 } });
+addRecipe({ id: 'fishing_rod',   skill: 'crafting', level: 2,  xp: 14, inputs: { stick: 3, pine_log: 1 },        outputs: { fishing_rod: 1 } });
+addRecipe({ id: 'wooden_club',   skill: 'crafting', level: 3,  xp: 16, inputs: { pine_log: 2 },                  outputs: { wooden_club: 1 } });
+addRecipe({ id: 'satchel',       skill: 'crafting', level: 6,  xp: 40, inputs: { pine_plank: 4, stick: 6 },      outputs: { satchel: 1 } });
+addRecipe({ id: 'leather_pack',  skill: 'crafting', level: 15, xp: 90, inputs: { wolf_pelt: 3, oak_plank: 2 },   outputs: { leather_pack: 1 } });
 
 addRecipe({ id: 'pine_plank',     skill: 'carpentry', level: 1,  xp: 5,  inputs: { pine_log: 1 },     outputs: { pine_plank: 1 } });
 addRecipe({ id: 'oak_plank',      skill: 'carpentry', level: 10, xp: 12, inputs: { oak_log: 1 },      outputs: { oak_plank: 1 } });
 addRecipe({ id: 'ironwood_plank', skill: 'carpentry', level: 25, xp: 25, inputs: { ironwood_log: 1 }, outputs: { ironwood_plank: 1 } });
 
-addRecipe({ id: 'copper_bar',    skill: 'smelting', level: 1,  xp: 6,  inputs: { copper_ore: 1 },               outputs: { copper_bar: 1 } });
-addRecipe({ id: 'iron_bar',      skill: 'smelting', level: 10, xp: 14, inputs: { iron_ore: 1 },                 outputs: { iron_bar: 1 } });
-addRecipe({ id: 'steel_bar',     skill: 'smelting', level: 20, xp: 25, inputs: { iron_ore: 1, coal: 2 },        outputs: { steel_bar: 1 } });
-addRecipe({ id: 'starmetal_bar', skill: 'smelting', level: 30, xp: 60, inputs: { star_fragment: 1, coal: 2 },   outputs: { starmetal_bar: 1 } });
+addRecipe({ id: 'copper_bar',    skill: 'smelting', level: 1,  xp: 6,  inputs: { copper_ore: 1 },             outputs: { copper_bar: 1 } });
+addRecipe({ id: 'iron_bar',      skill: 'smelting', level: 10, xp: 14, inputs: { iron_ore: 1 },               outputs: { iron_bar: 1 } });
+addRecipe({ id: 'steel_bar',     skill: 'smelting', level: 20, xp: 25, inputs: { iron_ore: 1, coal: 2 },      outputs: { steel_bar: 1 } });
+addRecipe({ id: 'starmetal_bar', skill: 'smelting', level: 30, xp: 60, inputs: { star_fragment: 1, coal: 2 }, outputs: { starmetal_bar: 1 } });
 
 addRecipe({ id: 'cook_minnow', skill: 'cooking', level: 1,  xp: 5,  inputs: { raw_minnow: 1 }, outputs: { minnow: 1 }, burn: true });
 addRecipe({ id: 'cook_trout',  skill: 'cooking', level: 10, xp: 12, inputs: { raw_trout: 1 },  outputs: { trout: 1 },  burn: true });
 addRecipe({ id: 'cook_pike',   skill: 'cooking', level: 20, xp: 22, inputs: { raw_pike: 1 },   outputs: { pike: 1 },   burn: true });
 
-// Generate gear items + smithing recipes for every tier.
+// Generate metal gear items + smithing recipes for every tier.
 for (const t of TIERS) {
   for (const g of GEAR) {
     const id = `${t.id}_${g.id}`;
@@ -134,45 +144,90 @@ for (const t of TIERS) {
   }
 }
 
+// Price category for each item, used by town markets.
+function itemCategory(id) {
+  const it = ITEMS[id];
+  if (it.rare) return 'rare';
+  if (it.heal) return 'food';
+  if (it.slot) return 'gear';
+  if (it.tool || it.pack) return 'tools';
+  if (id.endsWith('_log')) return 'logs';
+  if (id.endsWith('_plank')) return 'planks';
+  if (id.endsWith('_ore') || id === 'coal') return 'ore';
+  if (id.endsWith('_bar')) return 'bars';
+  if (id.startsWith('raw_')) return 'fish';
+  return 'basic';
+}
+
 const MONSTERS = {
-  goblin: { name: 'Goblin', ch: 'g', cls: 'goblin', level: 2,  hp: 5,  atk: 1,  def: 1,  maxHit: 1, speed: 2400, move: 700, aggressive: false,
-            coins: [1, 8],  drops: [['goblin_trinket', 1 / 8], ['rough_gem', 1 / 40]] },
-  wolf:   { name: 'Wolf',   ch: 'w', cls: 'wolf',   level: 7,  hp: 12, atk: 6,  def: 4,  maxHit: 2, speed: 2000, move: 500, aggressive: true,
-            coins: [0, 0],  drops: [['wolf_pelt', 1 / 2]] },
-  bandit: { name: 'Bandit', ch: 'b', cls: 'bandit', level: 14, hp: 22, atk: 12, def: 10, maxHit: 4, speed: 2400, move: 600, aggressive: true,
+  goblin: { name: 'Goblin', level: 2,  hp: 5,  atk: 1,  def: 1,  maxHit: 1, speed: 2400, move: 700, aggressive: false,
+            coins: [1, 8],   drops: [['goblin_trinket', 1 / 8], ['rough_gem', 1 / 40]] },
+  wolf:   { name: 'Wolf',   level: 7,  hp: 12, atk: 6,  def: 4,  maxHit: 2, speed: 2000, move: 450, aggressive: true,
+            coins: [0, 0],   drops: [['wolf_pelt', 1 / 2]] },
+  bandit: { name: 'Bandit', level: 14, hp: 22, atk: 12, def: 10, maxHit: 4, speed: 2400, move: 550, aggressive: true,
             coins: [10, 40], drops: [['bandit_signet', 1 / 12], ['iron_bar', 1 / 8], ['rough_gem', 1 / 25]], threat: -8 },
-  ogre:   { name: 'Ogre',   ch: 'O', cls: 'ogre',   level: 28, hp: 50, atk: 25, def: 20, maxHit: 7, speed: 3000, move: 900, aggressive: true,
+  ogre:   { name: 'Ogre',   level: 28, hp: 50, atk: 25, def: 20, maxHit: 7, speed: 3000, move: 800, aggressive: true,
             coins: [20, 60], drops: [['star_fragment', 1 / 4], ['ogre_tusk', 1 / 3], ['rough_gem', 1 / 10]] },
 };
 
-// Worker camps out in the wilds (gatherers). Vulnerable to bandit raids.
-const CAMPS = {
-  lumber:  { name: 'Lumber Camp',  site: 'L', skill: 'woodcutting', danger: 1.0, cost: { gold: 60 } },
-  mine:    { name: 'Mining Camp',  site: 'M', skill: 'mining',      danger: 1.2, cost: { gold: 120, pine_plank: 10 } },
-  fishery: { name: 'Fishing Hut',  site: 'P', skill: 'fishing',     danger: 0.8, cost: { gold: 90,  pine_plank: 8 } },
+// Everything the player can build. `con` is the Construction level needed; `work` is how
+// many seconds of hammering it takes. Levels go up to 3; upgrades cost (level + 1) x materials.
+const STRUCTS = {
+  workbench:   { name: 'Workbench',    size: 1, con: 1,  work: 4,  cost: { pine_log: 4, stick: 4 },
+                 station: 'crafting', desc: 'Craft rods, clubs and packs.' },
+  campfire:    { name: 'Campfire',     size: 1, con: 1,  work: 3,  cost: { pine_log: 3, stone: 4 },
+                 station: 'cooking', workers: [1, 2, 3], desc: 'Cook fish into food. Workers can cook for you.' },
+  sawbench:    { name: 'Sawbench',     size: 1, con: 2,  work: 5,  cost: { pine_log: 8, stone: 4 },
+                 station: 'carpentry', workers: [1, 2, 3], desc: 'Saw logs into planks.' },
+  storehouse:  { name: 'Storehouse',   size: 2, con: 3,  work: 8,  cost: { pine_plank: 12, stone: 10 },
+                 storage: [250, 500, 900], desc: 'Stores goods. Workers deliver here and stations nearby draw from it.' },
+  furnace:     { name: 'Furnace',      size: 1, con: 4,  work: 7,  cost: { stone: 20, pine_plank: 4 },
+                 station: 'smelting', workers: [1, 2, 3], desc: 'Smelt ore into metal bars.' },
+  house:       { name: 'Cottage',      size: 2, con: 5,  work: 9,  cost: { pine_plank: 20, stone: 12 },
+                 housing: [3, 5, 8], desc: 'Beds for workers and guards. You also respawn here.' },
+  anvil:       { name: 'Anvil',        size: 1, con: 7,  work: 6,  cost: { copper_bar: 5, pine_plank: 4, stone: 6 },
+                 station: 'smithing', workers: [1, 2, 3], desc: 'Smith metal tools, weapons and armour.' },
+  lumber_camp: { name: 'Lumber Camp',  size: 2, con: 8,  work: 9,  cost: { pine_plank: 15, copper_axe: 1 },
+                 gather: 'woodcutting', workers: [2, 4, 6], desc: 'Workers chop the trees around it. Build it in a forest.' },
+  dock:        { name: 'Fishing Dock', size: 2, con: 9,  work: 9,  cost: { pine_plank: 25, fishing_rod: 2 },
+                 gather: 'fishing', workers: [2, 4, 6], nearWater: true, desc: 'Workers fish nearby spots. Must touch water.' },
+  mine:        { name: 'Mine',         size: 2, con: 10, work: 10, cost: { pine_plank: 20, stone: 10, copper_pickaxe: 1 },
+                 gather: 'mining', workers: [2, 4, 6], desc: 'Workers mine the rocks around it.' },
+  guard_tower: { name: 'Guard Tower',  size: 1, con: 12, work: 12, cost: { stone: 40, oak_plank: 8, iron_bar: 4 },
+                 guards: [2, 3, 4], desc: 'Guards protect everything within 14 tiles from bandit raids.' },
 };
+const STRUCT_MAX_LEVEL = 3;
 
-// Refineries inside the town walls (safe). Consume from and produce into your stores.
-const WORKS = {
-  sawmill:    { name: 'Sawmill Works',  skill: 'carpentry', cost: { gold: 250, copper_bar: 10 } },
-  smelter:    { name: 'Smelting Works', skill: 'smelting',  cost: { gold: 350, pine_plank: 25 } },
-  smokehouse: { name: 'Smokehouse',     skill: 'cooking',   cost: { gold: 200, pine_plank: 15, copper_bar: 5 } },
-  armoury:    { name: 'Armoury',        skill: 'smithing',  cost: { gold: 600, iron_bar: 15, pine_plank: 20 } },
+// Trading towns. buy = what the town pays relative to base value, per category.
+// sells = goods its market stocks; markup = how much more you pay than base value.
+const TOWNS = {
+  ironhold:  { name: 'Ironhold',   kind: 'capital',  desc: 'The royal capital. Fair prices for everything.',
+               buy: {}, markup: 1.5,
+               sells: ['stick', 'stone', 'pine_log', 'copper_ore', 'raw_minnow', 'minnow', 'pine_plank'] },
+  stonedeep: { name: 'Stonedeep',  kind: 'mining',   desc: 'A mining town high in the mountains. Hungry for food and timber.',
+               buy: { food: 1.6, planks: 1.45, logs: 1.3, tools: 1.25, ore: 0.7, bars: 0.85 }, markup: 1.2,
+               sells: ['stone', 'copper_ore', 'iron_ore', 'coal', 'copper_bar', 'iron_bar'] },
+  saltmere:  { name: 'Saltmere',   kind: 'fishing',  desc: 'A fishing village on the southern coast. Pays well for boat timber and metal.',
+               buy: { planks: 1.5, bars: 1.3, tools: 1.3, fish: 0.6, food: 0.7 }, markup: 1.2,
+               sells: ['raw_trout', 'raw_pike', 'trout', 'pike', 'fishing_rod'] },
+  thornwood: { name: 'Thornwood',  kind: 'forest',   desc: 'A lodge deep in the western forest. Rich in timber, short of metal.',
+               buy: { bars: 1.4, gear: 1.3, food: 1.3, ore: 1.2, logs: 0.6, planks: 0.8 }, markup: 1.2,
+               sells: ['pine_log', 'oak_log', 'ironwood_log', 'pine_plank', 'oak_plank'] },
+  ratsnest:  { name: "Rat's Nest", kind: 'black',    desc: 'A bandit black market in the badlands. Pays a fortune for rare goods, no questions asked.',
+               buy: { rare: 1.9, gear: 1.2, default: 0.75 }, markup: 2.2,
+               sells: ['star_fragment', 'wolf_pelt', 'rough_gem', 'steel_bar'] },
 };
 
 const EMPIRE = {
-  maxLevel: 5,
-  ratePerWorker: 2,                  // items (or crafts) per minute per worker at level 1
-  wage: { gatherer: 2, refiner: 3, guard: 4 }, // gold per minute
-  campCap: lvl => 80 * lvl,
-  maxWorkers: lvl => 2 * lvl + 1,
-  maxGuards: lvl => lvl + 1,
-  hireCost: n => 25 + 20 * n,
+  ratePerWorker: 2,                    // items or crafts per minute per worker at level 1
+  wage: { worker: 2, guard: 4 },       // gold per minute
+  hireCost: n => 30 + 15 * n,
   guardCost: 40,
   guardPower: tier => 6 + 5 * tier,
-  raidInterval: 120,                 // seconds between raid rolls
+  towerRadius: 14,
+  gatherRadius: 7,
+  storeRadius: 20,                     // stations within this range of a storehouse can use its goods
+  raidInterval: 150,                   // seconds between raid rolls
   offlineCapHours: 12,
+  packBase: 40,
 };
-
-// Raw goods the market will sell to you. Rare monster materials are never sold.
-const BUYABLE = ['pine_log', 'oak_log', 'copper_ore', 'iron_ore', 'coal', 'raw_minnow', 'raw_trout', 'minnow', 'trout'];

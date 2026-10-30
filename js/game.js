@@ -1,154 +1,18 @@
-// Ironhold: a medieval refinement empire. Engine, world, UI. Drawing lives in render3d.js.
+// Ironhold: game logic, state, input and on-screen UI. The map lives in world.js; drawing in render3d.js.
 'use strict';
 
-const SAVE_KEY = 'ironhold-save-v1';
-const W = 160, H = 100;
-const TOWN = { x: 80, y: 50, x0: 68, x1: 92, y0: 43, y1: 57 };
+const SAVE_KEY = 'ironhold-save-v2';
 const TICK = 100;
-const WORLD_SEED = 1337;
+const PLAYER_R = 0.3;
+const REACH = 2.1;
 
-// ---------------------------------------------------------------- utilities
-function mulberry32(a) {
-  return function () {
-    a |= 0; a = a + 0x6D2B79F5 | 0;
-    let t = Math.imul(a ^ a >>> 15, 1 | a);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 const fmt = n => Math.floor(n).toLocaleString();
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
-const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const idx = (x, y) => y * W + x;
-const distTown = (x, y) => Math.hypot(x - TOWN.x, (y - TOWN.y) * 1.6);
-const inTown = (x, y) => x >= TOWN.x0 && x <= TOWN.x1 && y >= TOWN.y0 && y <= TOWN.y1;
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const itemName = id => (ITEMS[id] ? ITEMS[id].name : id);
 const skillName = id => SKILLS.find(s => s.id === id).name;
-
-function valueNoise(seed) {
-  const h = (x, y) => {
-    const s = Math.sin(x * 127.1 + y * 311.7 + seed * 74.7) * 43758.5453;
-    return s - Math.floor(s);
-  };
-  const sm = t => t * t * (3 - 2 * t);
-  const n = (x, y) => {
-    const ix = Math.floor(x), iy = Math.floor(y), fx = sm(x - ix), fy = sm(y - iy);
-    const a = h(ix, iy), b = h(ix + 1, iy), c = h(ix, iy + 1), d = h(ix + 1, iy + 1);
-    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
-  };
-  return (x, y) => 0.65 * n(x / 11, y / 7) + 0.35 * n(x / 4, y / 3);
-}
-
-// ---------------------------------------------------------------- world
-const T = { GRASS: 0, WATER: 1, WALL: 2, FLOOR: 3, ROAD: 4, MOUNTAIN: 5, BRIDGE: 6 };
-const WALKABLE = new Set([T.GRASS, T.FLOOR, T.ROAD, T.BRIDGE]);
-const terrain = new Uint8Array(W * H);
-const deco = new Uint8Array(W * H);
-const nodes = new Map();    // idx -> { res, until }
-const stations = new Map(); // idx -> station id
-const sites = new Map();    // idx -> camp or works id
-const sitePos = {};         // camp/works id -> {x,y}
-
-function pickWeighted(r, list) {
-  let roll = r(), acc = 0;
-  for (const [v, w] of list) { acc += w; if (roll < acc) return v; }
-  return list[list.length - 1][0];
-}
-
-function generateWorld() {
-  const r = mulberry32(WORLD_SEED);
-  const nf = valueNoise(1), nr = valueNoise(2), nw = valueNoise(3);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const i = idx(x, y);
-    deco[i] = Math.floor(r() * 10);
-    if (x < 2 || y < 2 || x >= W - 2 || y >= H - 2) { terrain[i] = T.MOUNTAIN; continue; }
-    terrain[i] = T.GRASS;
-    const d = distTown(x, y);
-    if (d < 16) continue;
-    const dx = (x - TOWN.x) / W, dy = (y - TOWN.y) / H;
-    const water = nw(x + 400, y + 400) + dy * 0.25;
-    const forest = nf(x, y) - dx * 0.35;
-    const rock = nr(x + 200, y + 200) + dx * 0.35;
-    if (water > 0.74) { terrain[i] = T.WATER; continue; }
-    if (forest > 0.6 && r() < 0.55) {
-      const res = d < 34 ? pickWeighted(r, [['pine', 0.9], ['oak', 0.1]])
-        : d < 55 ? pickWeighted(r, [['pine', 0.3], ['oak', 0.65], ['ironwood', 0.05]])
-        : pickWeighted(r, [['oak', 0.5], ['ironwood', 0.5]]);
-      nodes.set(i, { res, until: 0 });
-    } else if (rock > 0.66 && r() < 0.35) {
-      const res = d < 34 ? pickWeighted(r, [['copper', 0.88], ['iron', 0.12]])
-        : d < 55 ? pickWeighted(r, [['copper', 0.15], ['iron', 0.5], ['coal', 0.35]])
-        : pickWeighted(r, [['iron', 0.45], ['coal', 0.55]]);
-      nodes.set(i, { res, until: 0 });
-    }
-  }
-  // Hand-placed starter areas so the first minutes are always fun.
-  const blob = (cx, cy, rx, ry, fn) => {
-    for (let y = cy - ry; y <= cy + ry; y++) for (let x = cx - rx; x <= cx + rx; x++) {
-      if (((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1) fn(x, y, idx(x, y));
-    }
-  };
-  blob(57, 41, 6, 4, (x, y, i) => { if (r() < 0.55) nodes.set(i, { res: 'pine', until: 0 }); });
-  blob(104, 41, 5, 3, (x, y, i) => { if (r() < 0.45) nodes.set(i, { res: 'copper', until: 0 }); });
-  blob(80, 70, 9, 4, (x, y, i) => { terrain[i] = T.WATER; nodes.delete(i); });
-  // Fishing spots on shoreline water.
-  for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) {
-    const i = idx(x, y);
-    if (terrain[i] !== T.WATER) continue;
-    const shore = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([a, b]) => terrain[idx(x + a, y + b)] !== T.WATER);
-    if (!shore) continue;
-    const d = distTown(x, y);
-    const nearPond = d < 34;
-    if (r() < (nearPond ? 0.18 : 0.07)) {
-      const res = d < 34 ? 'minnow' : d < 55 ? pickWeighted(r, [['minnow', 0.3], ['trout', 0.7]]) : pickWeighted(r, [['trout', 0.4], ['pike', 0.6]]);
-      nodes.set(i, { res, until: 0 });
-    }
-  }
-  // Town walls and floor.
-  for (let y = TOWN.y0; y <= TOWN.y1; y++) for (let x = TOWN.x0; x <= TOWN.x1; x++) {
-    const i = idx(x, y);
-    nodes.delete(i);
-    const edge = x === TOWN.x0 || x === TOWN.x1 || y === TOWN.y0 || y === TOWN.y1;
-    terrain[i] = edge ? T.WALL : T.FLOOR;
-  }
-  // Roads out of each gate, bridging water.
-  const road = (x, y) => {
-    const i = idx(x, y);
-    if (terrain[i] === T.MOUNTAIN || inTown(x, y)) return;
-    terrain[i] = terrain[i] === T.WATER ? T.BRIDGE : T.ROAD;
-    nodes.delete(i);
-  };
-  for (let y = 2; y < H - 2; y++) road(TOWN.x, y);
-  for (let x = 2; x < W - 2; x++) road(x, TOWN.y);
-  for (const [x, y] of [[TOWN.x, TOWN.y0], [TOWN.x, TOWN.y1], [TOWN.x0, TOWN.y], [TOWN.x1, TOWN.y]]) terrain[idx(x, y)] = T.FLOOR;
-  // Stations.
-  const place = (x, y, id) => stations.set(idx(x, y), id);
-  place(73, 46, 'market'); place(76, 46, 'hall');
-  place(85, 46, 'furnace'); place(88, 46, 'anvil');
-  place(73, 54, 'sawmill'); place(87, 54, 'range');
-  // Camp sites along the roads.
-  const site = (x, y, id) => {
-    const i = idx(x, y);
-    terrain[i] = T.GRASS; nodes.delete(i);
-    sites.set(i, id); sitePos[id] = { x, y };
-  };
-  site(58, 48, 'lumber');
-  site(103, 48, 'mine');
-  site(83, 65, 'fishery');
-  // Building plots for the town works.
-  site(72, 53, 'sawmill');
-  site(88, 48, 'smelter');
-  site(84, 55, 'smokehouse');
-  site(88, 52, 'armoury');
-}
-
-function walkableTerrain(x, y) {
-  if (x < 0 || y < 0 || x >= W || y >= H) return false;
-  return WALKABLE.has(terrain[idx(x, y)]);
-}
-function nodeActive(n, now) { return n && n.until <= now; }
+const $ = id => document.getElementById(id);
 
 // Visual effect hooks; the 3D renderer replaces these.
 const FX = { damage() {}, gain() {}, lunge() {} };
@@ -160,35 +24,28 @@ let action = null;
 let messages = [];
 let nextMonsterId = 1;
 let uiDirty = true;
-let modal = null;          // { kind, data }
-let hoverText = '';
-let sidebarTab = 'skills';
-let lastMove = 0;
-let lastEat = 0;
-let lastRegen = 0;
-let lastSpawn = 0;
-let lastSave = 0;
-let lastTick = 0;
-let walkTarget = null;     // { x, y, monsterId? } for click-to-move
+let panel = null;              // { kind, data }
+let buildMode = null;          // { type, x, y, valid, reason, info }
+let interactTarget = null;
+let moving = false;
+const keys = new Set();
+const structIndex = new Map(); // tile idx -> struct
+let lastEat = 0, lastRegen = 0, lastSpawn = 0, lastSave = 0, lastTick = 0, lastInteractScan = 0;
 
 function newState() {
   const xp = {};
   for (const s of SKILLS) xp[s.id] = 0;
   xp.hitpoints = xpForLevel(10);
-  const camps = {}, works = {};
-  for (const id in CAMPS) camps[id] = { built: false, level: 0, workers: 0, guards: [], out: null, store: {}, acc: 0 };
-  for (const id in WORKS) works[id] = { built: false, level: 0, workers: 0, recipe: null, on: true, acc: 0, starved: false };
   return {
-    v: 1, x: TOWN.x, y: TOWN.y, hp: 10, gold: 25, xp,
-    inv: { worn_axe: 1, worn_pickaxe: 1, fishing_rod: 1, minnow: 3 },
-    equip: { weapon: null, shield: null, head: null, body: null },
+    v: 2, px: 200, py: 173, face: Math.PI, camYaw: 0, hp: 10, gold: 20, xp,
+    inv: {}, equip: { weapon: null, shield: null, head: null, body: null },
     style: 'attack',
-    market: { mult: {}, supply: {}, prev: {}, event: null, timer: 0 },
-    empire: { camps, works, raidTimer: 0, unpaid: false },
-    threat: 10,
+    markets: {}, marketTimer: 0,
+    structs: [], nextStructId: 1, store: {}, home: null,
+    threat: 8, raidTimer: 0, unpaid: false,
+    discovered: { ironhold: true },
     stats: { kills: 0, earned: 0 },
-    savedAt: Date.now(),
-    seenHelp: false,
+    savedAt: Date.now(), seenHelp: false,
   };
 }
 
@@ -204,13 +61,9 @@ function load() {
   if (!raw) return false;
   try {
     const s = JSON.parse(raw);
-    const fresh = newState();
-    // Merge so that saves from older versions pick up new fields.
-    state = Object.assign(fresh, s);
-    state.xp = Object.assign(fresh.xp, s.xp || {});
+    state = Object.assign(newState(), s);
+    state.xp = Object.assign(newState().xp, s.xp || {});
     state.equip = Object.assign(newState().equip, s.equip || {});
-    for (const id in CAMPS) state.empire.camps[id] = Object.assign(newState().empire.camps[id], (s.empire && s.empire.camps && s.empire.camps[id]) || {});
-    for (const id in WORKS) state.empire.works[id] = Object.assign(newState().empire.works[id], (s.empire && s.empire.works && s.empire.works[id]) || {});
     return true;
   } catch (e) {
     return false;
@@ -232,7 +85,7 @@ function addXp(skill, amount) {
   const after = lvl(skill);
   if (after > before) {
     log(`Level up! ${skillName(skill)} is now level ${after}.`, 'level');
-    FX.gain(state.x, state.y, `${skillName(skill)} ${after}!`, 'level');
+    FX.gain(state.px, state.py, `${skillName(skill)} ${after}!`, 'level');
     if (skill === 'hitpoints') state.hp += after - before;
   }
   uiDirty = true;
@@ -249,20 +102,51 @@ function removeItem(id, n = 1) {
   if (state.inv[id] <= 0) delete state.inv[id];
   uiDirty = true;
 }
-function hasAll(req, mult = 1) {
+function packCap() {
+  let bonus = 0;
+  for (const id in state.inv) if (ITEMS[id] && ITEMS[id].pack) bonus = Math.max(bonus, ITEMS[id].pack);
+  return EMPIRE.packBase + bonus;
+}
+const packUsed = () => Object.values(state.inv).reduce((a, b) => a + b, 0);
+const packFree = () => Math.max(0, packCap() - packUsed());
+
+// Storehouse stock is shared by every storehouse you own.
+const storeUsed = () => Object.values(state.store).reduce((a, b) => a + b, 0);
+function storeCap() {
+  let c = 0;
+  for (const s of state.structs) if (s.type === 'storehouse' && s.level) c += STRUCTS.storehouse.storage[s.level - 1];
+  return c;
+}
+function addStore(id, n) { state.store[id] = (state.store[id] || 0) + n; uiDirty = true; }
+function takeStore(id, n) { state.store[id] -= n; if (state.store[id] <= 0) delete state.store[id]; uiDirty = true; }
+function nearStorehouse(x, y) {
+  return state.structs.some(s => s.type === 'storehouse' && s.level && Math.hypot(structCenter(s).x - x, structCenter(s).y - y) <= EMPIRE.storeRadius);
+}
+
+// Counting and paying can draw on the storehouse when you're close to one.
+function count(id, useStore) { return have(id) + (useStore ? state.store[id] || 0 : 0); }
+function hasAll(req, useStore) {
   for (const k in req) {
-    if (k === 'gold') { if (state.gold < req[k] * mult) return false; }
-    else if (have(k) < req[k] * mult) return false;
+    if (k === 'gold') { if (state.gold < req[k]) return false; }
+    else if (count(k, useStore) < req[k]) return false;
   }
   return true;
 }
-function payAll(req) {
+function payAll(req, useStore) {
   for (const k in req) {
-    if (k === 'gold') state.gold -= req[k];
-    else removeItem(k, req[k]);
+    if (k === 'gold') { state.gold -= req[k]; continue; }
+    const fromPack = Math.min(have(k), req[k]);
+    if (fromPack) removeItem(k, fromPack);
+    if (req[k] > fromPack && useStore) takeStore(k, req[k] - fromPack);
   }
 }
 const costText = req => Object.entries(req).map(([k, v]) => k === 'gold' ? `${fmt(v)}g` : `${v} ${itemName(k)}`).join(', ');
+function costHtml(req, useStore) {
+  return Object.entries(req).map(([k, v]) => {
+    const ok = k === 'gold' ? state.gold >= v : count(k, useStore) >= v;
+    return `<span class="${ok ? '' : 'bad'}">${k === 'gold' ? fmt(v) + 'g' : `${v} ${esc(itemName(k))} (${count(k, useStore)})`}</span>`;
+  }).join(', ');
+}
 
 function bestTool(kind) {
   let best = null;
@@ -289,7 +173,7 @@ function equip(id) {
   const it = ITEMS[id];
   if (!it || !it.slot || !have(id)) return;
   const sk = SLOT_SKILL[it.slot];
-  if (lvl(sk) < it.req) { log(`You need ${skillName(sk)} level ${it.req} to wear the ${it.name}.`, 'warn'); return; }
+  if (lvl(sk) < it.req) { log(`You need ${skillName(sk)} level ${it.req} to use the ${it.name}.`, 'warn'); return; }
   const old = state.equip[it.slot];
   if (old) addItem(old);
   removeItem(id);
@@ -308,7 +192,6 @@ function eat(id) {
   const now = Date.now();
   if (now - lastEat < 1200) return;
   if (!id) {
-    // Eat the smallest food that doesn't overheal much, else the biggest.
     const foods = Object.keys(state.inv).filter(k => ITEMS[k] && ITEMS[k].heal).sort((a, b) => ITEMS[a].heal - ITEMS[b].heal);
     if (!foods.length) { log('You have no food.', 'warn'); return; }
     const missing = maxHp() - state.hp;
@@ -322,81 +205,488 @@ function eat(id) {
   log(`You eat the ${ITEMS[id].name}. (+${ITEMS[id].heal} HP)`, 'good');
 }
 
-// ---------------------------------------------------------------- messages
 function log(text, cls = '') {
-  messages.push({ text, cls });
-  if (messages.length > 80) messages.shift();
+  messages.push({ text, cls, t: Date.now() });
+  if (messages.length > 60) messages.shift();
   uiDirty = true;
 }
 
-// ---------------------------------------------------------------- monsters
-function monsterAt(x, y) { return monsters.find(m => m.x === x && m.y === y && m.hp > 0); }
+// ---------------------------------------------------------------- structures
+const structDef = s => STRUCTS[s.type];
+function footprint(x, y, size) {
+  const out = [];
+  for (let dy = 0; dy < size; dy++) for (let dx = 0; dx < size; dx++) out.push([x + dx, y + dy]);
+  return out;
+}
+const structCenter = s => ({ x: s.x + (structDef(s).size - 1) / 2, y: s.y + (structDef(s).size - 1) / 2 });
+function indexStructs() {
+  structIndex.clear();
+  for (const s of state.structs) for (const [x, y] of footprint(s.x, s.y, structDef(s).size)) structIndex.set(idx(x, y), s);
+}
+const structById = id => state.structs.find(s => s.id === id);
+const workNeeded = s => Math.round(structDef(s).work * (1 + 0.6 * ((s.pending || 1) - 1)));
+const buildPct = s => Math.floor(s.work / workNeeded(s) * 100);
 
-function blocked(x, y, forMonster) {
+function housingCap() {
+  let c = 0;
+  for (const s of state.structs) if (s.type === 'house' && s.level) c += STRUCTS.house.housing[s.level - 1];
+  return c;
+}
+const workerTotal = () => state.structs.reduce((a, s) => a + (s.workers || 0), 0);
+const guardTotal = () => state.structs.reduce((a, s) => a + (s.guards ? s.guards.length : 0), 0);
+const staffCount = () => workerTotal() + guardTotal();
+const wagesPerMin = () => workerTotal() * EMPIRE.wage.worker + guardTotal() * EMPIRE.wage.guard;
+function upgradeCost(s) {
+  const out = {}, base = structDef(s).cost;
+  for (const k in base) out[k] = base[k] * (s.level + 1);
+  return out;
+}
+
+// Nodes of a resource type close enough for a camp's workers to use.
+function richness(s, res) {
+  const size = STRUCTS[s.type].size, cx = s.x + (size - 1) / 2, cy = s.y + (size - 1) / 2, r = EMPIRE.gatherRadius;
+  let n = 0;
+  for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+    if (x < 0 || y < 0 || x >= W || y >= H) continue;
+    const node = nodes.get(idx(x, y));
+    if (node && node.res === res && Math.hypot(x - cx, y - cy) <= r) n++;
+  }
+  return n;
+}
+function campOutputs(s) {
+  const skill = structDef(s).gather;
+  return Object.keys(RESOURCES).filter(r => RESOURCES[r].skill === skill && lvl(skill) >= RESOURCES[r].level && richness(s, r) > 0);
+}
+function stationRecipes(type) {
+  const skill = STRUCTS[type].station;
+  return Object.keys(RECIPES).filter(r => RECIPES[r].skill === skill && lvl(skill) >= RECIPES[r].level);
+}
+
+function placementCheck(type, x, y) {
+  const def = STRUCTS[type];
+  if (lvl('construction') < def.con) return `Needs Construction ${def.con}`;
+  if (!hasAll(def.cost, nearStorehouse(x, y))) return 'Not enough materials';
+  const tiles = footprint(x, y, def.size);
+  let lo = Infinity, hi = -Infinity;
+  for (const [tx, ty] of tiles) {
+    if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1) return 'Out of bounds';
+    const i = idx(tx, ty), t = terrain[i];
+    if (t === T.ROAD || t === T.BRIDGE) return "Can't build on roads";
+    if (t !== T.GRASS && t !== T.SAND) return 'Needs open ground';
+    if (nodes.has(i) || structIndex.has(i) || services.has(i) || townBlocks.has(i)) return 'Something is in the way';
+    if (townAt(tx, ty, 5)) return 'Too close to a town';
+    if (Math.abs(tx - state.px) < 0.5 + PLAYER_R && Math.abs(ty - state.py) < 0.5 + PLAYER_R) return "You're standing there";
+    lo = Math.min(lo, tileH[i]); hi = Math.max(hi, tileH[i]);
+  }
+  if (hi - lo > 0.8) return 'Ground is too steep';
+  if (def.nearWater) {
+    const wet = tiles.some(([tx, ty]) => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([a, b]) => terrain[idx(tx + a, ty + b)] === T.WATER));
+    if (!wet) return 'Must be built next to water';
+  }
+  const cx = x + (def.size - 1) / 2, cy = y + (def.size - 1) / 2;
+  if (Math.hypot(cx - state.px, cy - state.py) > 14) return 'Too far away';
+  return null;
+}
+
+function startBuildMode(type) {
+  closePanel();
+  if (action && action.type !== 'combat') action = null;
+  const x = Math.round(state.px + Math.sin(state.face) * 3), y = Math.round(state.py + Math.cos(state.face) * 3);
+  buildMode = { type, x, y, valid: false, reason: '', info: '' };
+  updateBuildMode();
+}
+function setBuildCursor(x, y) {
+  if (!buildMode) return;
+  const s = STRUCTS[buildMode.type].size;
+  buildMode.x = Math.round(x - (s - 1) / 2);
+  buildMode.y = Math.round(y - (s - 1) / 2);
+  updateBuildMode();
+}
+function updateBuildMode() {
+  const reason = placementCheck(buildMode.type, buildMode.x, buildMode.y);
+  buildMode.valid = !reason;
+  buildMode.reason = reason || '';
+  const def = STRUCTS[buildMode.type];
+  buildMode.info = '';
+  if (def.gather) {
+    const fake = { type: buildMode.type, x: buildMode.x, y: buildMode.y };
+    const res = Object.keys(RESOURCES).filter(r => RESOURCES[r].skill === def.gather);
+    buildMode.info = res.map(r => [richness(fake, r), RESOURCES[r].name.toLowerCase()]).filter(([n]) => n).map(([n, name]) => `${n} ${name}`).join(', ') || 'nothing to gather';
+  }
+}
+function placeStructure() {
+  if (!buildMode) return;
+  updateBuildMode();
+  if (!buildMode.valid) { log(`Can't build here: ${buildMode.reason}.`, 'warn'); return; }
+  const def = STRUCTS[buildMode.type];
+  payAll(def.cost, nearStorehouse(buildMode.x, buildMode.y));
+  const s = { id: state.nextStructId++, type: buildMode.type, x: buildMode.x, y: buildMode.y, level: 0, pending: 1, work: 0, workers: 0, acc: 0 };
+  if (def.guards) s.guards = [];
+  if (def.station) s.on = true;
+  state.structs.push(s);
+  indexStructs();
+  log(`${def.name} site placed. Press E at it to build.`, 'good');
+  buildMode = null;
+  uiDirty = true;
+}
+
+function startConstruct(s) {
+  if (!s.pending) return;
+  action = { type: 'construct', sid: s.id, next: Date.now() + 1000 };
+}
+function processConstruct(now) {
+  const s = structById(action.sid);
+  if (!s || !s.pending) { action = null; return; }
+  const c = structCenter(s);
+  if (Math.hypot(c.x - state.px, c.y - state.py) > 3.5) { action = null; return; }
+  s.work++;
+  addXp('construction', 5 + structDef(s).con * 1.5);
+  if (s.work >= workNeeded(s)) {
+    s.level = s.pending;
+    s.pending = null;
+    s.work = 0;
+    log(s.level === 1 ? `You finished building the ${structDef(s).name}!` : `${structDef(s).name} upgraded to level ${s.level}!`, 'level');
+    FX.gain(state.px, state.py, 'Built!', 'level');
+    if (s.type === 'house' && !state.home) state.home = s.id;
+    if (structDef(s).gather && !s.out) s.out = campOutputs(s)[0] || null;
+    if (structDef(s).station && !s.recipe) s.recipe = stationRecipes(s.type)[0] || null;
+    action = null;
+    uiDirty = true;
+    return;
+  }
+  action.next = now + 1000;
+}
+
+function structAction(act, s, arg) {
+  if (!s) return;
+  const def = structDef(s);
+  switch (act) {
+    case 'upgrade': {
+      if (s.level >= STRUCT_MAX_LEVEL || s.pending) return;
+      const cost = upgradeCost(s), useStore = nearStorehouse(s.x, s.y), need = def.con + s.level * 5;
+      if (lvl('construction') < need) { log(`Needs Construction ${need}.`, 'warn'); return; }
+      if (!hasAll(cost, useStore)) { log(`You need ${costText(cost)}.`, 'warn'); return; }
+      payAll(cost, useStore);
+      s.pending = s.level + 1;
+      s.work = 0;
+      closePanel();
+      log(`Upgrade started. Press E at the ${def.name} to build it.`, 'good');
+      break;
+    }
+    case 'hire': {
+      if (s.workers >= def.workers[s.level - 1]) { log('No room for more workers here. Upgrade it first.', 'warn'); return; }
+      if (staffCount() >= housingCap()) { log('No free beds. Build or upgrade a Cottage.', 'warn'); return; }
+      const c = EMPIRE.hireCost(workerTotal());
+      if (state.gold < c) { log(`Hiring costs ${c} gold.`, 'warn'); return; }
+      state.gold -= c; s.workers++;
+      log(`You hired a worker for the ${def.name}.`);
+      break;
+    }
+    case 'fire': if (s.workers > 0) { s.workers--; log('You let a worker go.'); } break;
+    case 'guard': {
+      if (s.guards.length >= def.guards[s.level - 1]) { log('No room for more guards. Upgrade first.', 'warn'); return; }
+      if (staffCount() >= housingCap()) { log('No free beds. Build or upgrade a Cottage.', 'warn'); return; }
+      const swords = Object.keys(state.inv).filter(k => ITEMS[k] && ITEMS[k].sword).sort((a, b) => ITEMS[b].tier - ITEMS[a].tier);
+      if (!swords.length) { log('Each guard needs a sword in your pack.', 'warn'); return; }
+      if (state.gold < EMPIRE.guardCost) { log(`Hiring a guard costs ${EMPIRE.guardCost} gold.`, 'warn'); return; }
+      state.gold -= EMPIRE.guardCost;
+      removeItem(swords[0]);
+      s.guards.push(ITEMS[swords[0]].tier);
+      log(`You hired a guard armed with a ${itemName(swords[0]).toLowerCase()}.`);
+      break;
+    }
+    case 'dismiss': if (s.guards.length) { s.guards.shift(); log('You dismissed a guard.'); } break;
+    case 'cycle': {
+      const opts = def.gather ? campOutputs(s) : stationRecipes(s.type);
+      if (!opts.length) { log('Nothing available here yet.', 'warn'); return; }
+      const cur = def.gather ? s.out : s.recipe;
+      const next = opts[(opts.indexOf(cur) + 1) % opts.length];
+      if (def.gather) s.out = next; else { s.recipe = next; s.acc = 0; }
+      break;
+    }
+    case 'toggle': s.on = !s.on; break;
+    case 'use': openPanel('craft', { sid: s.id }); return;
+    case 'demolish': {
+      if (!confirm(`Demolish the ${def.name}? You get half the materials back.`)) return;
+      for (const k in def.cost) {
+        const n = Math.floor(def.cost[k] * Math.max(1, s.level) / 2);
+        if (n > 0) addItem(k, n);
+      }
+      state.structs = state.structs.filter(o => o !== s);
+      if (state.home === s.id) state.home = null;
+      indexStructs();
+      closePanel();
+      log(`You demolished the ${def.name}.`);
+      break;
+    }
+    case 'deposit': {
+      if (arg === 'all') depositAll();
+      else { const [id, n] = arg.split(':'); depositItem(id, +n); }
+      break;
+    }
+    case 'withdraw': {
+      const [id, nStr] = arg.split(':');
+      const n = Math.min(+nStr, state.store[id] || 0, packFree());
+      if (n <= 0) { log(packFree() ? 'Nothing to take.' : 'Your pack is full.', 'warn'); return; }
+      takeStore(id, n); addItem(id, n);
+      break;
+    }
+  }
+  uiDirty = true;
+}
+function depositItem(id, n) {
+  const room = storeCap() - storeUsed();
+  n = Math.min(n, have(id), room);
+  if (n <= 0) { if (!room) log('The storehouse is full.', 'warn'); return; }
+  removeItem(id, n); addStore(id, n);
+}
+function depositAll() {
+  for (const id of Object.keys(state.inv)) {
+    const it = ITEMS[id];
+    if (it.tool || it.slot || it.pack || it.heal) continue;
+    depositItem(id, have(id));
+  }
+}
+
+// ---------------------------------------------------------------- movement & collision
+const nodeActive = (n, now) => !!n && n.until <= now;
+const SOLID_RES = new Set(['pine', 'oak', 'ironwood', 'copper', 'iron', 'coal']);
+function solidTile(x, y, now) {
   if (!walkableTerrain(x, y)) return true;
-  const i = idx(x, y);
-  if (nodeActive(nodes.get(i), Date.now())) return true;
-  if (stations.has(i) || sites.has(i)) return true;
-  if (monsterAt(x, y)) return true;
-  if (forMonster) {
-    if (x === state.x && y === state.y) return true;
-    if (distTown(x, y) < 15) return true;
+  const i = idx(x, y), n = nodes.get(i);
+  if (n && SOLID_RES.has(n.res) && n.until <= now) return true;
+  return services.has(i) || townBlocks.has(i) || structIndex.has(i);
+}
+function collides(px, py, now) {
+  for (let ty = Math.round(py - PLAYER_R); ty <= Math.round(py + PLAYER_R); ty++) {
+    for (let tx = Math.round(px - PLAYER_R); tx <= Math.round(px + PLAYER_R); tx++) {
+      if (!solidTile(tx, ty, now)) continue;
+      const cx = clamp(px, tx - 0.5, tx + 0.5), cy = clamp(py, ty - 0.5, ty + 0.5);
+      if ((px - cx) ** 2 + (py - cy) ** 2 < PLAYER_R * PLAYER_R) return true;
+    }
   }
   return false;
 }
 
-function spawnMonster(nearPlayerOk) {
-  for (let tries = 0; tries < 30; tries++) {
-    const x = randInt(3, W - 4), y = randInt(3, H - 4);
-    const d = distTown(x, y);
-    if (d < 20 || blocked(x, y, true)) continue;
-    if (!nearPlayerOk && Math.abs(x - state.x) < 34 && Math.abs(y - state.y) < 16) continue;
-    const type = d < 36 ? pickWeighted(Math.random, [['goblin', 0.65], ['wolf', 0.35]])
-      : d < 56 ? pickWeighted(Math.random, [['goblin', 0.1], ['wolf', 0.4], ['bandit', 0.5]])
-      : pickWeighted(Math.random, [['wolf', 0.1], ['bandit', 0.45], ['ogre', 0.45]]);
+function movePlayer(dt, now) {
+  const f = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+  const r = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+  moving = !!(f || r);
+  if (!moving) return;
+  const yaw = state.camYaw;
+  let dx = -Math.sin(yaw) * f + Math.cos(yaw) * r;
+  let dy = -Math.cos(yaw) * f - Math.sin(yaw) * r;
+  const len = Math.hypot(dx, dy);
+  dx /= len; dy /= len;
+  const step = dt * (keys.has('shift') ? 6.5 : 4);
+  if (!collides(state.px + dx * step, state.py, now)) state.px += dx * step;
+  if (!collides(state.px, state.py + dy * step, now)) state.py += dy * step;
+  state.face = Math.atan2(dx, dy);
+  if (action && action.type !== 'combat') action = null;
+}
+
+const inAnyTown = () => !!townAt(Math.round(state.px), Math.round(state.py), 1);
+
+// ---------------------------------------------------------------- interaction
+function describeTarget(t) {
+  if (!t) return '';
+  if (t.kind === 'monster') { const d = MONSTERS[t.m.type]; return `Attack ${d.name} (lvl ${d.level})`; }
+  if (t.kind === 'node') {
+    const r = RESOURCES[t.n.res];
+    const verb = r.skill === 'woodcutting' ? 'Chop' : r.skill === 'mining' ? 'Mine' : r.skill === 'fishing' ? 'Fish at' : 'Gather from';
+    return `${verb} ${r.name.toLowerCase()}${r.skill && lvl(r.skill) < r.level ? ` (needs ${skillName(r.skill)} ${r.level})` : ''}`;
+  }
+  if (t.kind === 'service') return t.svc.type === 'market' ? `Trade at the ${TOWNS[t.svc.town].name} market` : 'Hire a carriage';
+  if (t.kind === 'struct') {
+    const def = structDef(t.s);
+    if (t.s.pending) return `${t.s.level ? 'Upgrade' : 'Build'} ${def.name} (${buildPct(t.s)}%)`;
+    return `Use ${def.name}`;
+  }
+  return '';
+}
+
+function findInteract(now) {
+  const px = state.px, py = state.py, fx = Math.sin(state.face), fy = Math.cos(state.face);
+  let best = null, bestScore = Infinity;
+  const consider = (x, y, t, reach) => {
+    const dx = x - px, dy = y - py, d = Math.hypot(dx, dy);
+    if (d > reach) return;
+    const dot = d > 0.01 ? (dx * fx + dy * fy) / d : 1;
+    const score = d - dot * 0.7;
+    if (score < bestScore) { bestScore = score; best = t; }
+  };
+  for (const m of monsters) if (m.hp > 0 && Math.abs(m.x - px) < 3 && Math.abs(m.y - py) < 3) consider(m.x, m.y, { kind: 'monster', m }, 2.4);
+  const tx = Math.round(px), ty = Math.round(py);
+  for (let y = ty - 2; y <= ty + 2; y++) for (let x = tx - 2; x <= tx + 2; x++) {
+    if (x < 0 || y < 0 || x >= W || y >= H) continue;
+    const i = idx(x, y), n = nodes.get(i);
+    if (nodeActive(n, now)) consider(x, y, { kind: 'node', i, n, x, y }, RESOURCES[n.res].skill === 'fishing' ? 2.3 : REACH);
+    const svc = services.get(i);
+    if (svc) consider(x, y, { kind: 'service', svc, x, y }, REACH);
+    const s = structIndex.get(i);
+    if (s) consider(x, y, { kind: 'struct', s, x, y }, REACH);
+  }
+  return best;
+}
+
+function interact(t) {
+  if (!t) return;
+  if (t.kind === 'monster') startCombat(t.m);
+  else if (t.kind === 'node') startGather(t.i);
+  else if (t.kind === 'service') openPanel(t.svc.type, { town: t.svc.town });
+  else if (t.kind === 'struct') { if (t.s.pending) startConstruct(t.s); else openPanel('struct', { sid: t.s.id }); }
+}
+
+// Called by the renderer when the world is clicked.
+function clickWorld(pick) {
+  if (buildMode) { placeStructure(); return; }
+  if (!pick) return;
+  const now = Date.now();
+  let t = null;
+  if (pick.monsterId != null) {
+    const m = monsters.find(mm => mm.id === pick.monsterId && mm.hp > 0);
+    if (m) t = { kind: 'monster', m, x: m.x, y: m.y };
+  } else {
+    const i = idx(pick.x, pick.y);
+    if (structIndex.has(i)) t = { kind: 'struct', s: structIndex.get(i), x: pick.x, y: pick.y };
+    else if (services.has(i)) t = { kind: 'service', svc: services.get(i), x: pick.x, y: pick.y };
+    else if (nodeActive(nodes.get(i), now)) t = { kind: 'node', i, n: nodes.get(i), x: pick.x, y: pick.y };
+  }
+  if (!t) return;
+  if (Math.hypot(t.x - state.px, t.y - state.py) > (t.kind === 'node' ? 2.6 : 2.8)) { log('That is too far away. Walk closer.', 'dim'); return; }
+  interact(t);
+}
+
+// ---------------------------------------------------------------- gathering & crafting
+function startGather(i) {
+  const n = nodes.get(i), r = RESOURCES[n.res];
+  if (r.skill && lvl(r.skill) < r.level) { log(`You need ${skillName(r.skill)} level ${r.level} for the ${r.name.toLowerCase()}.`, 'warn'); return; }
+  if (r.tool && !bestTool(r.tool)) {
+    log(r.tool === 'rod' ? 'You need a fishing rod. Make one at a Workbench.' : `You need ${r.tool === 'axe' ? 'an axe' : 'a pickaxe'}. Press C to craft a stone one.`, 'warn');
+    return;
+  }
+  if (!packFree()) { log('Your pack is full.', 'warn'); return; }
+  if (action && action.type === 'gather' && action.i === i) return;
+  action = { type: 'gather', i, next: Date.now() + gatherTime(r) };
+}
+const gatherTime = r => r.time || 2400 - ITEMS[bestTool(r.tool)].tier * 300;
+
+function processGather(now) {
+  const n = nodes.get(action.i);
+  if (!nodeActive(n, now)) { action = null; return; }
+  const r = RESOURCES[n.res];
+  const x = action.i % W, y = Math.floor(action.i / W);
+  if (Math.hypot(x - state.px, y - state.py) > 2.8) { action = null; return; }
+  if (r.tool && !bestTool(r.tool)) { action = null; return; }
+  const tier = r.tool ? ITEMS[bestTool(r.tool)].tier : 0;
+  const chance = r.skill ? clamp(0.3 + (lvl(r.skill) - r.level) * 0.025 + tier * 0.07, 0.05, 0.95) : 1;
+  if (Math.random() < chance) {
+    addItem(r.item);
+    FX.gain(state.px, state.py, `+1 ${itemName(r.item)}`);
+    if (r.skill) addXp(r.skill, r.xp);
+    if (r.stone && Math.random() < r.stone && packFree()) { addItem('stone'); FX.gain(state.px, state.py, '+1 Stone'); }
+    if (Math.random() < r.deplete) { n.until = now + r.respawn * 1000; action = null; return; }
+    if (!packFree()) { log('Your pack is full.', 'warn'); action = null; return; }
+  }
+  action.next = now + gatherTime(r);
+}
+
+function craftContext(sid) {
+  if (sid == null) return { station: null, useStore: false };
+  const s = structById(sid);
+  return { station: s, useStore: !!s && nearStorehouse(s.x, s.y) };
+}
+
+function startCraft(recipeId, n, sid) {
+  const r = RECIPES[recipeId], ctx = craftContext(sid);
+  if (lvl(r.skill) < r.level) { log(`You need ${skillName(r.skill)} level ${r.level}.`, 'warn'); return; }
+  if (!hasAll(r.inputs, ctx.useStore)) { log(`You need ${costText(r.inputs)}.`, 'warn'); return; }
+  if (action && action.type !== 'combat') action = null;
+  action = { type: 'craft', recipe: recipeId, left: n, sid, next: Date.now() + 1200 };
+  closePanel();
+}
+
+function processCraft(now) {
+  const r = RECIPES[action.recipe], ctx = craftContext(action.sid);
+  if (action.sid != null && !ctx.station) { action = null; return; }
+  if (!hasAll(r.inputs, ctx.useStore)) { log('You run out of materials.', 'dim'); action = null; return; }
+  const outN = Object.values(r.outputs).reduce((a, b) => a + b, 0);
+  let fromPack = 0;
+  for (const k in r.inputs) fromPack += Math.min(have(k), r.inputs[k]);
+  if (packFree() + fromPack < outN && !(ctx.useStore && storeCap() - storeUsed() >= outN)) { log('Your pack is full.', 'warn'); action = null; return; }
+  payAll(r.inputs, ctx.useStore);
+  const give = (id, k) => (packFree() >= k || !ctx.useStore ? addItem(id, k) : addStore(id, k));
+  if (r.burn && Math.random() < Math.max(0, 0.45 - (lvl(r.skill) - r.level) * 0.04)) {
+    give('burnt_fish', 1);
+    FX.gain(state.px, state.py, 'Burnt!');
+    addXp(r.skill, 1);
+  } else {
+    for (const k in r.outputs) { give(k, r.outputs[k]); FX.gain(state.px, state.py, `+${r.outputs[k]} ${itemName(k)}`); }
+    addXp(r.skill, r.xp);
+  }
+  action.left--;
+  if (action.left <= 0 || !hasAll(r.inputs, ctx.useStore)) { action = null; return; }
+  action.next = now + 1200;
+}
+
+// ---------------------------------------------------------------- monsters & combat
+function monsterAt(x, y) { return monsters.find(m => m.x === x && m.y === y && m.hp > 0); }
+function monsterBlocked(x, y, now) {
+  if (solidTile(x, y, now)) return true;
+  if (townAt(x, y, 3)) return true;
+  if (x === Math.round(state.px) && y === Math.round(state.py)) return true;
+  return !!monsterAt(x, y);
+}
+
+function spawnMonster(far) {
+  for (let tries = 0; tries < 25; tries++) {
+    const x = randInt(2, W - 3), y = randInt(2, H - 3);
+    if (far && Math.abs(x - state.px) < 40 && Math.abs(y - state.py) < 40) continue;
+    const table = spawnTable(x, y);
+    if (!table || monsterBlocked(x, y, Date.now())) continue;
+    const type = pickWeighted(Math.random, table);
     monsters.push({ id: nextMonsterId++, type, x, y, hx: x, hy: y, hp: MONSTERS[type].hp, aggro: false, nextMove: 0, nextAtk: 0 });
     return;
   }
 }
 
-function stepToward(m, tx, ty) {
+function stepToward(m, tx, ty, now) {
   const dx = Math.sign(tx - m.x), dy = Math.sign(ty - m.y);
   const opts = Math.abs(tx - m.x) > Math.abs(ty - m.y) ? [[dx, 0], [0, dy]] : [[0, dy], [dx, 0]];
   for (const [a, b] of opts) {
-    if ((a || b) && !blocked(m.x + a, m.y + b, true)) { m.x += a; m.y += b; return; }
+    if ((a || b) && !monsterBlocked(m.x + a, m.y + b, now)) { m.x += a; m.y += b; return; }
   }
 }
 
 function updateMonsters(now) {
-  const cl = combatLevel();
+  const cl = combatLevel(), safe = inAnyTown();
   for (const m of monsters) {
     if (m.hp <= 0) continue;
+    if (Math.abs(m.x - state.px) > 50 || Math.abs(m.y - state.py) > 50) continue;
     const def = MONSTERS[m.type];
-    const dist = Math.abs(m.x - state.x) + Math.abs(m.y - state.y);
-    if (!m.aggro && def.aggressive && dist <= 6 && cl <= def.level * 2 + 4 && !inTown(state.x, state.y)) {
+    const dist = Math.hypot(m.x - state.px, m.y - state.py);
+    if (!m.aggro && def.aggressive && dist <= 6 && cl <= def.level * 2 + 4 && !safe) {
       m.aggro = true;
-      log(`A ${def.name.toLowerCase()} notices you!`, 'warn');
+      log(`A ${def.name.toLowerCase()} is coming for you!`, 'warn');
     }
-    if (m.aggro && (dist > 15 || inTown(state.x, state.y) || Math.abs(m.x - m.hx) + Math.abs(m.y - m.hy) > 25)) m.aggro = false;
+    if (m.aggro && (dist > 16 || safe || Math.hypot(m.x - m.hx, m.y - m.hy) > 28)) m.aggro = false;
     if (now >= m.nextMove) {
       if (m.aggro) {
-        if (dist > 1) stepToward(m, state.x, state.y);
+        if (dist > 1.3) stepToward(m, Math.round(state.px), Math.round(state.py), now);
         m.nextMove = now + def.move;
       } else {
-        // Wander, but drift back toward home when strayed too far.
-        if (Math.abs(m.x - m.hx) + Math.abs(m.y - m.hy) > 8) stepToward(m, m.hx, m.hy);
+        if (Math.hypot(m.x - m.hx, m.y - m.hy) > 8) stepToward(m, m.hx, m.hy, now);
         else if (Math.random() < 0.4) {
           const [a, b] = [[1, 0], [-1, 0], [0, 1], [0, -1]][randInt(0, 3)];
-          if (!blocked(m.x + a, m.y + b, true)) { m.x += a; m.y += b; }
+          if (!monsterBlocked(m.x + a, m.y + b, now)) { m.x += a; m.y += b; }
         }
         m.nextMove = now + 1200 + Math.random() * 2000;
       }
     }
-    const adj = Math.abs(m.x - state.x) + Math.abs(m.y - state.y) === 1;
-    if (m.aggro && adj && now >= m.nextAtk) {
+    if (m.aggro && dist <= 1.6 && now >= m.nextAtk) {
       monsterAttack(m);
       m.nextAtk = now + def.speed;
-      if (!action) { action = { type: 'combat', id: m.id, next: now + 600 }; }
+      if (!action) action = { type: 'combat', id: m.id, next: now + 600 };
     }
   }
   monsters = monsters.filter(m => m.hp > 0);
@@ -406,7 +696,19 @@ function hitChance(atkRoll, defRoll) {
   return atkRoll > defRoll ? 1 - (defRoll + 2) / (2 * (atkRoll + 1)) : atkRoll / (2 * (defRoll + 1));
 }
 
-function playerAttack(m) {
+function startCombat(m) {
+  if (inAnyTown()) return;
+  action = { type: 'combat', id: m.id, next: Date.now() + 300 };
+  m.aggro = true;
+}
+
+function processCombat(now) {
+  const m = monsters.find(mm => mm.id === action.id && mm.hp > 0);
+  if (!m) { action = null; return; }
+  const dist = Math.hypot(m.x - state.px, m.y - state.py);
+  if (dist > 8) { action = null; return; }
+  if (dist > 1.8) return;
+  if (!moving) state.face = Math.atan2(m.x - state.px, m.y - state.py);
   const def = MONSTERS[m.type], eq = equipStats();
   const atkL = lvl('attack') + (state.style === 'attack' ? 3 : 0);
   const strL = lvl('strength') + (state.style === 'strength' ? 3 : 0);
@@ -414,14 +716,15 @@ function playerAttack(m) {
   const maxHit = Math.max(1, Math.floor(0.5 + (strL + 8) * (64 + eq.str) / 640));
   const dmg = hit ? randInt(1, maxHit) : 0;
   m.aggro = true;
-  m.flash = Date.now() + 250;
   FX.damage(m.x, m.y, dmg);
   if (dmg > 0) {
     m.hp -= dmg;
     addXp(state.style, dmg * 4);
     addXp('hitpoints', dmg * 1.33);
   }
-  if (m.hp <= 0) killMonster(m);
+  if (m.hp <= 0) { killMonster(m); return; }
+  const weaponTier = state.equip.weapon ? ITEMS[state.equip.weapon].tier : 0;
+  action.next = now + 2400 - weaponTier * 150;
 }
 
 function monsterAttack(m) {
@@ -430,15 +733,13 @@ function monsterAttack(m) {
   const hit = Math.random() < hitChance((def.atk + 8) * 64, (defL + 8) * (64 + eq.def));
   const dmg = hit ? randInt(1, def.maxHit) : 0;
   FX.lunge(m);
-  FX.damage(state.x, state.y, dmg, true);
+  FX.damage(state.px, state.py, dmg, true);
   if (dmg > 0) {
     state.hp -= dmg;
-    playerFlash = Date.now() + 250;
     uiDirty = true;
     if (state.hp <= 0) die(def);
   }
 }
-let playerFlash = 0;
 
 function killMonster(m) {
   const def = MONSTERS[m.type];
@@ -454,227 +755,90 @@ function killMonster(m) {
   action = null;
 }
 
+function respawnPoint() {
+  const home = state.home && structById(state.home);
+  if (home && home.level) {
+    for (const [x, y] of [[home.x - 1, home.y], [home.x + 2, home.y], [home.x, home.y - 1], [home.x, home.y + 2]]) {
+      if (!collides(x, y, Date.now())) return { x, y };
+    }
+  }
+  return { x: TOWN_DEFS.ironhold.x, y: TOWN_DEFS.ironhold.y + 3 };
+}
+
 function die(killer) {
   const lost = Math.floor(state.gold * 0.1);
   state.gold -= lost;
   state.hp = maxHp();
-  state.x = TOWN.x; state.y = TOWN.y;
+  const p = respawnPoint();
+  state.px = p.x; state.py = p.y;
   action = null;
-  walkTarget = null;
   for (const m of monsters) m.aggro = false;
-  log(`You were slain by a ${killer.name.toLowerCase()}! You wake in town, ${lost} gold lighter.`, 'bad');
+  log(`You were slain by a ${killer.name.toLowerCase()}! You wake up ${lost ? lost + ' gold lighter' : 'bruised'}.`, 'bad');
 }
 
-// ---------------------------------------------------------------- player actions
-function tryMove(dx, dy, auto) {
-  const now = Date.now();
-  if (!auto) walkTarget = null;
-  if (now - lastMove < 110) return;
-  lastMove = now;
-  const tx = state.x + dx, ty = state.y + dy;
-  const i = idx(tx, ty);
-  const m = monsterAt(tx, ty);
-  if (m) { startCombat(m); return; }
-  const n = nodes.get(i);
-  if (nodeActive(n, now)) { startGather(i); return; }
-  if (stations.has(i)) { openStation(stations.get(i)); return; }
-  if (sites.has(i)) { openModal('empire', { focus: sites.get(i) }); return; }
-  if (blocked(tx, ty)) return;
-  state.x = tx; state.y = ty;
-  if (action) { action = null; }
-  uiDirty = true;
-}
-
-// Click-to-move: walk to a tile, or next to it if it's something to interact with.
-function clickTile(x, y) {
-  if (modal || x < 0 || y < 0 || x >= W || y >= H) return;
-  if (x === state.x && y === state.y) return;
-  const m = monsterAt(x, y);
-  walkTarget = m ? { x, y, monsterId: m.id } : { x, y };
-}
-
-function walkStep() {
-  const t = walkTarget;
-  if (t.monsterId) {
-    const m = monsters.find(mm => mm.id === t.monsterId && mm.hp > 0);
-    if (!m) { walkTarget = null; return; }
-    t.x = m.x; t.y = m.y;
-  }
-  const dist = Math.abs(t.x - state.x) + Math.abs(t.y - state.y);
-  if (dist === 0) { walkTarget = null; return; }
-  const occupied = new Set(monsters.filter(m => m.hp > 0).map(m => idx(m.x, m.y)));
-  const targetFree = !blocked(t.x, t.y);
-  if (dist === 1 && !targetFree) {
-    walkTarget = null;
-    tryMove(t.x - state.x, t.y - state.y, true);
-    return;
-  }
-  const step = firstStep(t.x, t.y, targetFree, occupied);
-  if (!step) { walkTarget = null; log("You can't find a way there.", 'dim'); return; }
-  tryMove(step[0], step[1], true);
-}
-
-// Breadth-first search; returns the first [dx, dy] toward the goal.
-function firstStep(tx, ty, toTile, occupied) {
-  const now = Date.now();
-  const start = idx(state.x, state.y);
-  const prev = new Map([[start, -1]]);
-  const q = [start];
-  const goal = (x, y) => (toTile ? x === tx && y === ty : Math.abs(x - tx) + Math.abs(y - ty) === 1);
-  for (let head = 0; head < q.length && prev.size < 15000; head++) {
-    const c = q[head], cx = c % W, cy = (c - cx) / W;
-    if (c !== start && goal(cx, cy)) {
-      let n = c;
-      while (prev.get(n) !== start) n = prev.get(n);
-      return [n % W - state.x, Math.floor(n / W) - state.y];
-    }
-    for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const nx = cx + a, ny = cy + b, ni = idx(nx, ny);
-      if (prev.has(ni) || !walkableTerrain(nx, ny) || occupied.has(ni)) continue;
-      if (nodeActive(nodes.get(ni), now) || stations.has(ni) || sites.has(ni)) continue;
-      prev.set(ni, c);
-      q.push(ni);
-    }
-  }
-  return null;
-}
-
-function startCombat(m) {
-  if (inTown(state.x, state.y)) return;
-  action = { type: 'combat', id: m.id, next: Date.now() + 300 };
-  m.aggro = true;
-}
-
-function startGather(i) {
-  const n = nodes.get(i), r = RESOURCES[n.res];
-  if (lvl(r.skill) < r.level) { log(`You need ${skillName(r.skill)} level ${r.level} for the ${r.name.toLowerCase()}.`, 'warn'); return; }
-  const tool = bestTool(r.tool);
-  if (!tool) { log(`You need ${r.tool === 'rod' ? 'a fishing rod' : 'an ' + r.tool} for that.`, 'warn'); return; }
-  if (action && action.type === 'gather' && action.i === i) return;
-  action = { type: 'gather', i, next: Date.now() + gatherTime(tool) };
-  const verb = { woodcutting: 'chop at', mining: 'mine', fishing: 'fish at' }[r.skill];
-  log(`You ${verb} the ${r.name.toLowerCase()}...`);
-}
-const gatherTime = tool => 2400 - ITEMS[tool].tier * 300;
-
-function processGather(now) {
-  const n = nodes.get(action.i);
-  if (!nodeActive(n, now)) { action = null; return; }
-  const r = RESOURCES[n.res];
-  const tool = bestTool(r.tool);
-  if (!tool) { action = null; return; }
-  const chance = clamp(0.3 + (lvl(r.skill) - r.level) * 0.025 + ITEMS[tool].tier * 0.07, 0.05, 0.95);
-  if (Math.random() < chance) {
-    addItem(r.item);
-    FX.gain(state.x, state.y, `+1 ${itemName(r.item)}`);
-    addXp(r.skill, r.xp);
-    log(`You get some ${itemName(r.item).toLowerCase()}.`);
-    if (Math.random() < r.deplete) {
-      n.until = now + r.respawn * 1000;
-      log(r.skill === 'woodcutting' ? 'The tree falls.' : 'The rock is exhausted.', 'dim');
-      action = null;
-      return;
-    }
-  }
-  action.next = now + gatherTime(tool);
-}
-
-function processCombat(now) {
-  const m = monsters.find(mm => mm.id === action.id && mm.hp > 0);
-  if (!m) { action = null; return; }
-  const dist = Math.abs(m.x - state.x) + Math.abs(m.y - state.y);
-  if (dist > 8) { action = null; return; }
-  if (dist !== 1) return;
-  const weaponTier = state.equip.weapon ? ITEMS[state.equip.weapon].tier : 0;
-  playerAttack(m);
-  if (action) action.next = now + 2400 - weaponTier * 150;
-}
-
-function startCraft(recipeId, n) {
-  const r = RECIPES[recipeId];
-  if (lvl(r.skill) < r.level) { log(`You need ${skillName(r.skill)} level ${r.level}.`, 'warn'); return; }
-  if (!hasAll(r.inputs)) { log(`You need ${costText(r.inputs)}.`, 'warn'); return; }
-  action = { type: 'craft', recipe: recipeId, left: n, next: Date.now() + 1200 };
-  closeModal();
-  log(`You start making ${itemName(Object.keys(r.outputs)[0]).toLowerCase()}...`);
-}
-
-function processCraft(now) {
-  const r = RECIPES[action.recipe];
-  if (!hasAll(r.inputs)) { log('You run out of materials.', 'dim'); action = null; return; }
-  payAll(r.inputs);
-  if (r.burn && Math.random() < Math.max(0, 0.45 - (lvl(r.skill) - r.level) * 0.04)) {
-    addItem('burnt_fish');
-    log('You accidentally burn the fish.', 'dim');
-    addXp(r.skill, 1);
-  } else {
-    for (const k in r.outputs) addItem(k, r.outputs[k]);
-    addXp(r.skill, r.xp);
-  }
-  action.left--;
-  if (action.left <= 0 || !hasAll(r.inputs)) {
-    log(`You finish crafting.`, 'dim');
-    action = null;
-    return;
-  }
-  action.next = now + 1200;
-}
-
-// ---------------------------------------------------------------- market
+// ---------------------------------------------------------------- markets
 function marketInit() {
-  const m = state.market;
-  for (const id in ITEMS) {
-    if (m.mult[id] == null) m.mult[id] = 0.85 + Math.random() * 0.3;
-    if (m.prev[id] == null) m.prev[id] = m.mult[id];
-    if (m.supply[id] == null) m.supply[id] = 0;
+  for (const town in TOWNS) {
+    const m = state.markets[town] = state.markets[town] || { mult: {}, supply: {}, prev: {}, event: null };
+    for (const id in ITEMS) {
+      if (m.mult[id] == null) m.mult[id] = 0.85 + Math.random() * 0.3;
+      if (m.prev[id] == null) m.prev[id] = m.mult[id];
+      if (m.supply[id] == null) m.supply[id] = 0;
+    }
   }
 }
 
 function marketDrift() {
-  const m = state.market;
-  for (const id in ITEMS) {
-    m.prev[id] = m.mult[id];
-    const noise = (Math.random() + Math.random() + Math.random() - 1.5) * 0.08;
-    m.mult[id] = clamp(m.mult[id] + (1 - m.mult[id]) * 0.06 + noise, 0.5, 2.0);
-    m.supply[id] *= 0.92;
+  const news = [];
+  for (const town in TOWNS) {
+    const m = state.markets[town];
+    for (const id in ITEMS) {
+      m.prev[id] = m.mult[id];
+      const noise = (Math.random() + Math.random() + Math.random() - 1.5) * 0.08;
+      m.mult[id] = clamp(m.mult[id] + (1 - m.mult[id]) * 0.06 + noise, 0.5, 2.0);
+      m.supply[id] *= 0.92;
+    }
+    if (m.event && --m.event.left <= 0) m.event = null;
+    if (!m.event && Math.random() < 0.03) {
+      const pool = Object.keys(ITEMS).filter(k => ITEMS[k].value >= 5);
+      const id = pool[randInt(0, pool.length - 1)];
+      const boom = Math.random() < 0.65;
+      m.mult[id] = boom ? 1.9 : 0.55;
+      m.event = { id, boom, left: 8 };
+      news.push(boom ? `News from ${TOWNS[town].name}: a big order drives up the price of ${itemName(id).toLowerCase()}!`
+        : `News from ${TOWNS[town].name}: a glut of ${itemName(id).toLowerCase()} floods the market.`);
+    }
   }
-  if (m.event && --m.event.left <= 0) m.event = null;
-  if (!m.event && Math.random() < 0.06) {
-    const pool = Object.keys(ITEMS).filter(k => !ITEMS[k].tool || ITEMS[k].tier > 0);
-    const id = pool[randInt(0, pool.length - 1)];
-    const boom = Math.random() < 0.65;
-    m.mult[id] = boom ? 1.9 : 0.55;
-    m.event = { id, boom, left: 6 };
-    return boom ? `Market news: a royal order drives up the price of ${itemName(id).toLowerCase()}!`
-      : `Market news: a glut of ${itemName(id).toLowerCase()} floods the stalls.`;
-  }
-  return null;
+  return news;
 }
 
-function sellPrice(id) {
-  const m = state.market;
-  return Math.max(1, Math.round(ITEMS[id].value * m.mult[id] / (1 + m.supply[id] / 60)));
+function townBuyMult(town, id) {
+  const b = TOWNS[town].buy, c = itemCategory(id);
+  return b[c] != null ? b[c] : b.default != null ? b.default : 1;
 }
-const buyPrice = id => Math.ceil(ITEMS[id].value * state.market.mult[id] * 1.5);
+function sellPrice(town, id) {
+  const m = state.markets[town];
+  return Math.max(1, Math.round(ITEMS[id].value * townBuyMult(town, id) * m.mult[id] / (1 + m.supply[id] / 60)));
+}
+const buyPrice = (town, id) => Math.ceil(ITEMS[id].value * state.markets[town].mult[id] * TOWNS[town].markup);
 
-function sell(id, n) {
+function sell(town, id, n) {
   n = Math.min(n, have(id));
-  let total = 0;
-  for (let k = 0; k < n; k++) {
-    total += sellPrice(id);
-    state.market.supply[id] += 1;
-  }
   if (!n) return;
+  let total = 0;
+  for (let k = 0; k < n; k++) { total += sellPrice(town, id); state.markets[town].supply[id] += 1; }
   removeItem(id, n);
   state.gold += total;
   state.stats.earned += total;
   log(`Sold ${n} ${itemName(id)} for ${fmt(total)} gold.`, 'gold');
 }
 
-function buy(id, n) {
+function buy(town, id, n) {
+  n = Math.min(n, packFree());
+  if (!n) { log('Your pack is full.', 'warn'); return; }
   let bought = 0, total = 0;
   for (let k = 0; k < n; k++) {
-    const p = buyPrice(id);
+    const p = buyPrice(town, id);
     if (state.gold < p) break;
     state.gold -= p; total += p; bought++;
   }
@@ -683,73 +847,83 @@ function buy(id, n) {
   log(`Bought ${bought} ${itemName(id)} for ${fmt(total)} gold.`, 'gold');
 }
 
-// ---------------------------------------------------------------- empire
-function campOutputs(id) {
-  return Object.keys(RESOURCES).filter(r => RESOURCES[r].skill === CAMPS[id].skill && lvl(RESOURCES[r].skill) >= RESOURCES[r].level);
+const carriageFee = (from, to) => 15 + Math.round(Math.hypot(TOWN_DEFS[from].x - TOWN_DEFS[to].x, TOWN_DEFS[from].y - TOWN_DEFS[to].y) / 4);
+function travel(from, to) {
+  const fee = carriageFee(from, to);
+  if (state.gold < fee) { log(`The carriage costs ${fee} gold.`, 'warn'); return; }
+  state.gold -= fee;
+  state.px = TOWN_DEFS[to].x + 3; state.py = TOWN_DEFS[to].y - 1;
+  action = null;
+  closePanel();
+  log(`You ride the carriage to ${TOWNS[to].name}.`, 'good');
 }
-function worksRecipes(id) {
-  return Object.keys(RECIPES).filter(r => RECIPES[r].skill === WORKS[id].skill && lvl(RECIPES[r].skill) >= RECIPES[r].level);
-}
-const campStored = c => Object.values(c.store).reduce((a, b) => a + b, 0);
 
-function wagesPerMin() {
-  const E = state.empire;
-  let w = 0;
-  for (const id in E.camps) { const c = E.camps[id]; if (c.built) w += c.workers * EMPIRE.wage.gatherer + c.guards.length * EMPIRE.wage.guard; }
-  for (const id in E.works) { const k = E.works[id]; if (k.built && k.on) w += k.workers * EMPIRE.wage.refiner; }
-  return w;
+// ---------------------------------------------------------------- empire simulation
+function structDanger(s) {
+  const c = structCenter(s), i = idx(Math.round(c.x), Math.round(c.y));
+  const dCap = Math.hypot(c.x - TOWN_DEFS.ironhold.x, c.y - TOWN_DEFS.ironhold.y);
+  return 0.6 + dCap / 120 + (biome[i] === BIOME.BADLANDS ? 0.6 : 0) + (biome[i] === BIOME.HIGHLANDS ? 0.4 : 0);
+}
+function towerDefense(s) {
+  const c = structCenter(s);
+  let d = 0;
+  for (const t of state.structs) {
+    if (t.type !== 'guard_tower' || !t.level) continue;
+    const tc = structCenter(t);
+    if (Math.hypot(tc.x - c.x, tc.y - c.y) <= EMPIRE.towerRadius) d += t.guards.reduce((a, g) => a + EMPIRE.guardPower(g), 0);
+  }
+  return d;
 }
 
 // Advance the empire by dt seconds. `report` collects totals for offline summaries.
 function simEmpire(dt, report) {
-  const E = state.empire;
   const wage = wagesPerMin() * dt / 60;
   if (wage > 0) {
     if (state.gold < wage) {
-      if (!E.unpaid) logOrReport(report, 'Your workers are unpaid and have stopped working!', 'bad');
-      E.unpaid = true;
+      if (!state.unpaid) logOrReport(report, 'Your workers are unpaid and have stopped working!', 'bad');
+      state.unpaid = true;
       return;
     }
     state.gold -= wage;
     if (report) report.wages += wage;
   }
-  E.unpaid = false;
-  for (const id in E.camps) {
-    const c = E.camps[id];
-    if (!c.built || !c.workers || !c.out) continue;
-    c.acc += c.workers * EMPIRE.ratePerWorker * (1 + 0.25 * (c.level - 1)) * dt / 60;
-    const n = Math.floor(c.acc);
-    c.acc -= n;
-    const room = EMPIRE.campCap(c.level) - campStored(c);
-    const add = Math.min(n, Math.max(0, room));
-    if (add > 0) {
-      const item = RESOURCES[c.out].item;
-      c.store[item] = (c.store[item] || 0) + add;
-      if (report) report.produced[item] = (report.produced[item] || 0) + add;
-    }
-  }
-  for (const id in E.works) {
-    const k = E.works[id];
-    if (!k.built || !k.on || !k.workers || !k.recipe) continue;
-    k.acc += k.workers * EMPIRE.ratePerWorker * (1 + 0.25 * (k.level - 1)) * dt / 60;
-    const n = Math.floor(k.acc);
-    k.acc -= n;
-    const r = RECIPES[k.recipe];
-    k.starved = false;
-    for (let j = 0; j < n; j++) {
-      if (!hasAll(r.inputs)) { k.starved = true; k.acc = 0; break; }
-      payAll(r.inputs);
-      for (const o in r.outputs) {
-        addItem(o, r.outputs[o]);
-        if (report) report.produced[o] = (report.produced[o] || 0) + r.outputs[o];
+  state.unpaid = false;
+  const capN = storeCap();
+  for (const s of state.structs) {
+    const def = structDef(s);
+    if (!s.level || !s.workers) continue;
+    if (s.damaged > 0) { s.damaged = Math.max(0, s.damaged - dt); continue; }
+    const rate = s.workers * EMPIRE.ratePerWorker * (1 + 0.25 * (s.level - 1)) * dt / 60;
+    if (def.gather && s.out) {
+      s.acc += rate * Math.min(1, richness(s, s.out) / 5);
+      const n = Math.floor(s.acc);
+      s.acc -= n;
+      const add = Math.min(n, Math.max(0, capN - storeUsed()));
+      if (add > 0) {
+        const item = RESOURCES[s.out].item;
+        addStore(item, add);
+        if (report) report.produced[item] = (report.produced[item] || 0) + add;
       }
-      if (report) for (const i in r.inputs) report.consumed[i] = (report.consumed[i] || 0) + r.inputs[i];
+      if (n) s.blocked = n > add ? 'full' : null;
+    } else if (def.station && s.recipe && s.on) {
+      s.acc += rate;
+      const n = Math.floor(s.acc);
+      s.acc -= n;
+      const r = RECIPES[s.recipe];
+      if (n) s.blocked = null;
+      for (let j = 0; j < n; j++) {
+        let ok = true;
+        for (const k in r.inputs) if ((state.store[k] || 0) < r.inputs[k]) ok = false;
+        if (!ok) { s.blocked = 'materials'; s.acc = 0; break; }
+        for (const k in r.inputs) { takeStore(k, r.inputs[k]); if (report) report.consumed[k] = (report.consumed[k] || 0) + r.inputs[k]; }
+        for (const o in r.outputs) { addStore(o, r.outputs[o]); if (report) report.produced[o] = (report.produced[o] || 0) + r.outputs[o]; }
+      }
     }
   }
   state.threat = Math.min(100, state.threat + 0.5 * dt / 60);
-  E.raidTimer += dt;
-  while (E.raidTimer >= EMPIRE.raidInterval) {
-    E.raidTimer -= EMPIRE.raidInterval;
+  state.raidTimer += dt;
+  while (state.raidTimer >= EMPIRE.raidInterval) {
+    state.raidTimer -= EMPIRE.raidInterval;
     rollRaids(report);
   }
 }
@@ -760,113 +934,40 @@ function logOrReport(report, text, cls) {
 }
 
 function rollRaids(report) {
-  const E = state.empire;
-  for (const id in E.camps) {
-    const c = E.camps[id], def = CAMPS[id];
-    if (!c.built) continue;
-    const chance = (0.03 + state.threat / 400) * def.danger;
-    if (Math.random() >= chance) continue;
-    const strength = 4 + state.threat * 0.25 + Math.random() * 8 * def.danger;
-    const defense = c.guards.reduce((a, t) => a + EMPIRE.guardPower(t), 0);
-    if (defense >= strength) {
+  for (const s of state.structs) {
+    const def = structDef(s);
+    if (!s.level || !(def.gather || s.type === 'storehouse')) continue;
+    const danger = structDanger(s);
+    if (Math.random() >= (0.02 + state.threat / 400) * danger) continue;
+    const strength = 4 + state.threat * 0.25 + Math.random() * 8 * danger;
+    if (towerDefense(s) >= strength) {
       state.threat = Math.max(0, state.threat - 5);
-      logOrReport(report, `Bandits raided your ${def.name} but your guards drove them off!`, 'good');
+      logOrReport(report, `Bandits attacked your ${def.name}, but your guards drove them off!`, 'good');
       continue;
     }
-    const frac = 0.4 + Math.random() * 0.4;
-    let stolen = 0;
-    for (const k in c.store) { const s = Math.floor(c.store[k] * frac); c.store[k] -= s; stolen += s; }
-    let extra = '';
-    if (c.workers > 0 && Math.random() < 0.25) { c.workers--; extra += ' A worker fled.'; }
-    if (c.guards.length && Math.random() < 0.3) { c.guards.pop(); extra += ' A guard was killed.'; }
     state.threat = Math.max(0, state.threat - 15);
-    logOrReport(report, `Bandits raided your ${def.name} and stole ${stolen} goods!${extra}`, 'bad');
+    if (s.type === 'storehouse') {
+      const frac = 0.15 + Math.random() * 0.2;
+      let stolen = 0;
+      for (const k of Object.keys(state.store)) { const n = Math.floor(state.store[k] * frac); if (n) { takeStore(k, n); stolen += n; } }
+      logOrReport(report, `Bandits raided your Storehouse and stole ${stolen} goods!`, 'bad');
+    } else {
+      s.damaged = 180;
+      let extra = '';
+      if (s.workers > 0 && Math.random() < 0.3) { s.workers--; extra = ' A worker quit.'; }
+      logOrReport(report, `Bandits wrecked your ${def.name}! It's out of action for 3 minutes.${extra}`, 'bad');
+    }
   }
 }
 
-function upgradeCost(base, level) {
-  const out = {};
-  for (const k in base) out[k] = Math.round(base[k] * (k === 'gold' ? Math.pow(2.5, level) : level + 1));
-  return out;
-}
-
-function empireAction(act, id) {
-  const E = state.empire;
-  const isCamp = !!CAMPS[id];
-  const b = isCamp ? E.camps[id] : E.works[id];
-  const def = isCamp ? CAMPS[id] : WORKS[id];
-  switch (act) {
-    case 'build': case 'upgrade': {
-      if (b.level >= EMPIRE.maxLevel) return;
-      const cost = upgradeCost(def.cost, b.level);
-      if (!hasAll(cost)) { log(`You need ${costText(cost)}.`, 'warn'); return; }
-      payAll(cost);
-      b.level++;
-      if (!b.built) {
-        b.built = true;
-        if (isCamp) b.out = campOutputs(id)[0] || null;
-        else b.recipe = worksRecipes(id)[0] || null;
-        log(`You built a ${def.name}!`, 'level');
-      } else log(`${def.name} upgraded to level ${b.level}.`, 'level');
-      break;
-    }
-    case 'hire': {
-      if (b.workers >= EMPIRE.maxWorkers(b.level)) { log('No room for more workers. Upgrade first.', 'warn'); return; }
-      const c = EMPIRE.hireCost(b.workers);
-      if (state.gold < c) { log(`Hiring costs ${c} gold.`, 'warn'); return; }
-      state.gold -= c; b.workers++;
-      log(`You hired a worker for the ${def.name}.`);
-      break;
-    }
-    case 'fire': if (b.workers > 0) { b.workers--; log('You let a worker go.'); } break;
-    case 'guard': {
-      if (b.guards.length >= EMPIRE.maxGuards(b.level)) { log('No room for more guards. Upgrade first.', 'warn'); return; }
-      const swords = Object.keys(state.inv).filter(k => ITEMS[k] && ITEMS[k].sword).sort((a, c) => ITEMS[c].tier - ITEMS[a].tier);
-      if (!swords.length) { log('Each guard needs a sword. Smith one at the anvil.', 'warn'); return; }
-      if (state.gold < EMPIRE.guardCost) { log(`Hiring a guard costs ${EMPIRE.guardCost} gold.`, 'warn'); return; }
-      state.gold -= EMPIRE.guardCost;
-      removeItem(swords[0]);
-      b.guards.push(ITEMS[swords[0]].tier);
-      log(`You hired a guard armed with a ${itemName(swords[0]).toLowerCase()}.`);
-      break;
-    }
-    case 'dismiss': if (b.guards.length) { b.guards.shift(); log('You dismissed a guard.'); } break;
-    case 'collect': {
-      const got = [];
-      for (const k in b.store) if (b.store[k] > 0) { addItem(k, b.store[k]); got.push(`${b.store[k]} ${itemName(k)}`); }
-      b.store = {};
-      log(got.length ? `Collected ${got.join(', ')}.` : 'Nothing to collect.', got.length ? 'good' : 'dim');
-      break;
-    }
-    case 'cycle': {
-      const opts = isCamp ? campOutputs(id) : worksRecipes(id);
-      if (!opts.length) return;
-      const cur = isCamp ? b.out : b.recipe;
-      const next = opts[(opts.indexOf(cur) + 1) % opts.length];
-      if (isCamp) b.out = next; else { b.recipe = next; b.acc = 0; }
-      break;
-    }
-    case 'toggle': b.on = !b.on; break;
-  }
-  uiDirty = true;
-}
-
-function collectAll() {
-  for (const id in state.empire.camps) if (state.empire.camps[id].built) empireAction('collect', id);
-}
-
-// ---------------------------------------------------------------- offline progress
 function runOffline() {
   const elapsed = Math.min((Date.now() - state.savedAt) / 1000, EMPIRE.offlineCapHours * 3600);
   if (elapsed < 30) return null;
   const report = { seconds: elapsed, produced: {}, consumed: {}, wages: 0, events: [] };
-  const goldBefore = state.gold;
-  const step = 10;
-  for (let t = 0; t < elapsed; t += step) simEmpire(Math.min(step, elapsed - t), report);
-  const drifts = Math.min(200, Math.floor(elapsed / 30));
-  for (let k = 0; k < drifts; k++) marketDrift();
-  state.market.event = null;
-  report.goldDelta = state.gold - goldBefore;
+  for (let t = 0; t < elapsed; t += 10) simEmpire(Math.min(10, elapsed - t), report);
+  for (let k = 0; k < Math.min(200, Math.floor(elapsed / 30)); k++) marketDrift();
+  for (const town in TOWNS) state.markets[town].event = null;
+  if (!Object.keys(report.produced).length && !report.events.length && !report.wages) return null;
   return report;
 }
 
@@ -876,17 +977,17 @@ function update() {
   const dt = lastTick ? (now - lastTick) / 1000 : 0;
   lastTick = now;
 
-  if (walkTarget && now - lastMove >= 150 && !modal) walkStep();
   if (action && now >= action.next) {
     if (action.type === 'gather') processGather(now);
     else if (action.type === 'combat') processCombat(now);
     else if (action.type === 'craft') processCraft(now);
+    else if (action.type === 'construct') processConstruct(now);
   }
   updateMonsters(now);
 
-  if (now - lastSpawn > 2000) {
+  if (now - lastSpawn > 1000) {
     lastSpawn = now;
-    if (monsters.length < 70) spawnMonster(false);
+    if (monsters.length < 230) spawnMonster(true);
   }
   if (now - lastRegen > 6000) {
     lastRegen = now;
@@ -894,352 +995,485 @@ function update() {
   }
   if (dt > 0 && dt < 5) simEmpire(dt, null);
 
-  state.market.timer += dt;
-  if (state.market.timer >= 30) {
-    state.market.timer = 0;
-    const news = marketDrift();
-    if (news) log(news, 'gold');
-    if (modal && modal.kind === 'market') uiDirty = true;
+  state.marketTimer += dt;
+  if (state.marketTimer >= 30) {
+    state.marketTimer = 0;
+    for (const n of marketDrift()) log(n, 'gold');
+    if (panel && panel.kind === 'market') uiDirty = true;
   }
+
+  const town = townAt(Math.round(state.px), Math.round(state.py), 2);
+  if (town && !state.discovered[town]) {
+    state.discovered[town] = true;
+    log(`You discovered ${TOWNS[town].name}! ${TOWNS[town].desc}`, 'level');
+  }
+
+  if (now - lastInteractScan > 150) {
+    lastInteractScan = now;
+    if (buildMode) updateBuildMode();
+    interactTarget = buildMode ? null : findInteract(now);
+  }
+
   if (now - lastSave > 15000) save();
-
-  $('status').textContent = statusText(now);
-  if (uiDirty) { renderUI(); uiDirty = false; }
+  renderHud();
+  if (uiDirty) { renderPanel(); renderLog(); uiDirty = false; }
 }
 
-// ---------------------------------------------------------------- rendering
-const $ = id => document.getElementById(id);
-
-function statusText(now) {
-  let zone = inTown(state.x, state.y) ? 'Town of Ironhold' : (() => {
-    const d = distTown(state.x, state.y);
-    return d < 20 ? 'Town outskirts' : d < 36 ? 'The Green Wilds' : d < 56 ? 'Bandit Marches' : 'The Deep Wilds (danger!)';
-  })();
-  let act = '';
-  if (action) {
-    if (action.type === 'gather') act = ` | Gathering: ${RESOURCES[nodes.get(action.i).res].name}`;
-    if (action.type === 'craft') act = ` | Crafting: ${itemName(Object.keys(RECIPES[action.recipe].outputs)[0])} (${action.left} left)`;
-    if (action.type === 'combat') act = ' | In combat';
-  }
-  return `${zone} (${state.x},${state.y})${act}${hoverText ? ' | ' + hoverText : ''}`;
+// Movement runs every animation frame so walking is smooth, in small steps so slow frames don't tunnel through walls.
+function frameMove(dt) {
+  const now = Date.now();
+  let left = Math.min(dt, 0.25);
+  while (left > 0) { const step = Math.min(left, 0.05); movePlayer(step, now); left -= step; }
 }
 
-function describe(x, y) {
-  if (x < 0 || y < 0 || x >= W || y >= H) return '';
-  if (x === state.x && y === state.y) return 'You';
-  const i = idx(x, y), now = Date.now();
-  const m = monsterAt(x, y);
-  if (m) { const d = MONSTERS[m.type]; return `${d.name} (lvl ${d.level}) ${Math.max(0, m.hp)}/${d.hp} HP`; }
-  if (stations.has(i)) { const s = STATIONS[stations.get(i)]; return `${s.name}: ${s.desc}`; }
-  if (sites.has(i)) {
-    const id = sites.get(i), b = CAMPS[id] ? state.empire.camps[id] : state.empire.works[id];
-    return `${(CAMPS[id] || WORKS[id]).name}${b.built ? ` (level ${b.level})` : ': empty plot, build it at the Guild Hall'}`;
-  }
-  const n = nodes.get(i);
-  if (n) {
-    const r = RESOURCES[n.res];
-    return nodeActive(n, now) ? `${r.name} (${skillName(r.skill)} ${r.level})` : `Depleted ${r.name.toLowerCase()}`;
-  }
-  return { [T.GRASS]: 'Grass', [T.WATER]: 'Water', [T.WALL]: 'Town wall', [T.FLOOR]: 'Cobbles', [T.ROAD]: 'Road', [T.MOUNTAIN]: 'Mountains', [T.BRIDGE]: 'Bridge' }[terrain[i]];
-}
-
-function bar(cur, max, cls) {
+// ---------------------------------------------------------------- HUD
+function bar(cur, max, cls, label) {
   const pct = clamp(cur / max * 100, 0, 100);
-  return `<div class="bar ${cls}"><div style="width:${pct}%"></div><span>${fmt(cur)} / ${fmt(max)}</span></div>`;
+  return `<div class="bar ${cls}"><div style="width:${pct}%"></div><span>${label != null ? label : `${fmt(cur)} / ${fmt(max)}`}</span></div>`;
 }
 
-function renderUI() {
-  $('gold').textContent = fmt(state.gold);
-  $('hpbar').innerHTML = bar(Math.max(0, state.hp), maxHp(), 'hp');
-  $('combat').textContent = `Combat lvl ${combatLevel()} | Style: ${cap(state.style)}`;
-  $('threat').innerHTML = `Bandit threat: ${bar(state.threat, 100, 'threat')}`;
-  $('wages').textContent = `Wages: ${wagesPerMin()}g/min${state.empire.unpaid ? ' (UNPAID!)' : ''}`;
+let lastHudKey = '';
+function renderHud() {
+  const key = [Math.floor(state.gold), state.hp, packUsed(), packCap(), state.style, Math.floor(state.threat), wagesPerMin(), state.unpaid, combatLevel()].join('|');
+  if (key !== lastHudKey) {
+    lastHudKey = key;
+    $('hud-stats').innerHTML = `
+      ${bar(Math.max(0, state.hp), maxHp(), 'hp')}
+      <div class="row"><span class="gold">${fmt(state.gold)} gold</span><span>Pack ${packUsed()}/${packCap()}</span></div>
+      <div class="row small"><span>Combat lvl ${combatLevel()}</span><span>Style: ${cap(state.style)} (X)</span></div>
+      <div class="row small"><span>Bandit threat ${Math.floor(state.threat)}%</span><span>${wagesPerMin() ? `Wages ${wagesPerMin()}g/min` : ''}${state.unpaid ? ' <b class="bad">UNPAID</b>' : ''}</span></div>`;
+  }
+  $('zone').textContent = regionName(state.px, state.py);
 
   const tgt = action && action.type === 'combat' ? monsters.find(m => m.id === action.id) : null;
-  $('target').innerHTML = tgt ? `<b>${MONSTERS[tgt.type].name}</b> (lvl ${MONSTERS[tgt.type].level})${bar(Math.max(0, tgt.hp), MONSTERS[tgt.type].hp, 'enemy')}` : '';
+  const tEl = $('hud-target');
+  if (tgt) {
+    const d = MONSTERS[tgt.type];
+    tEl.innerHTML = `<b>${d.name}</b> lvl ${d.level}${bar(Math.max(0, tgt.hp), d.hp, 'enemy')}`;
+    tEl.classList.remove('hidden');
+  } else tEl.classList.add('hidden');
 
-  for (const b of document.querySelectorAll('.tab')) b.classList.toggle('active', b.dataset.tab === sidebarTab);
-  $('tabbody').innerHTML = sidebarTab === 'skills' ? skillsHtml() : sidebarTab === 'inv' ? invHtml() : gearHtml();
+  let prompt = '';
+  if (buildMode) {
+    const def = STRUCTS[buildMode.type];
+    prompt = `Placing <b>${def.name}</b>: ${buildMode.valid ? '<span class="good">click to place</span>' : `<span class="bad">${esc(buildMode.reason)}</span>`}` +
+      `${buildMode.info ? `<br><span class="small">In range: ${esc(buildMode.info)}</span>` : ''}<br><span class="small dim">Right-click or Esc to cancel</span>`;
+  } else if (action) {
+    if (action.type === 'gather') prompt = `${esc(describeTarget({ kind: 'node', n: nodes.get(action.i) }))}...`;
+    else if (action.type === 'craft') prompt = `Making ${esc(itemName(Object.keys(RECIPES[action.recipe].outputs)[0]))} (${action.left} left)`;
+    else if (action.type === 'construct') { const s = structById(action.sid); prompt = s ? `Building ${structDef(s).name}: ${buildPct(s)}%` : ''; }
+    else if (action.type === 'combat') prompt = tgt && Math.hypot(tgt.x - state.px, tgt.y - state.py) > 1.8 ? 'Get closer to attack!' : 'Fighting! <kbd>F</kbd> to eat';
+  } else if (interactTarget) prompt = `<kbd>E</kbd> ${esc(describeTarget(interactTarget))}`;
+  const pEl = $('prompt');
+  if (pEl.innerHTML !== prompt) pEl.innerHTML = prompt;
+  pEl.classList.toggle('hidden', !prompt);
+}
 
-  $('log').innerHTML = messages.slice(-40).map(m => `<div class="${m.cls}">${esc(m.text)}</div>`).join('');
-  $('log').scrollTop = $('log').scrollHeight;
+function renderLog() {
+  $('log').innerHTML = messages.slice(-6).map(m => `<div class="${m.cls}">${esc(m.text)}</div>`).join('');
+}
 
-  if (modal) renderModal();
+// Minimap: a pre-rendered image of the whole map, rotated with the camera.
+let mapImage = null;
+function buildMapImage() {
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const img = g.createImageData(W, H);
+  for (let i = 0; i < W * H; i++) {
+    let r = tileRGB[i * 3], gg = tileRGB[i * 3 + 1], b = tileRGB[i * 3 + 2];
+    const n = nodes.get(i);
+    if (n && SOLID_RES.has(n.res)) {
+      if (RESOURCES[n.res].skill === 'woodcutting') { r *= 0.55; gg *= 0.72; b *= 0.55; } else { r = 0.42; gg = 0.4; b = 0.38; }
+    }
+    if (townBlocks.has(i)) { r = 0.55; gg = 0.3; b = 0.25; }
+    img.data[i * 4] = r * 255; img.data[i * 4 + 1] = gg * 255; img.data[i * 4 + 2] = b * 255; img.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  mapImage = cv;
+}
+
+function drawMinimap() {
+  const cv = $('minimap'), g = cv.getContext('2d');
+  const size = cv.width, scale = 2.2, yaw = state.camYaw;
+  g.save();
+  g.clearRect(0, 0, size, size);
+  g.beginPath(); g.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2); g.clip();
+  g.fillStyle = '#1d3a52'; g.fillRect(0, 0, size, size);
+  g.translate(size / 2, size / 2);
+  g.rotate(yaw);
+  g.scale(scale, scale);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(mapImage, -state.px - 0.5, -state.py - 0.5);
+  for (const s of state.structs) {
+    g.fillStyle = s.level ? '#ffd84a' : '#c9a86a';
+    const sz = structDef(s).size;
+    g.fillRect(s.x - state.px - 0.5, s.y - state.py - 0.5, sz, sz);
+  }
+  for (const m of monsters) {
+    if (Math.abs(m.x - state.px) > 45 || Math.abs(m.y - state.py) > 45) continue;
+    g.fillStyle = m.aggro ? '#ff3a2a' : '#b8443e';
+    g.fillRect(m.x - state.px - 0.6, m.y - state.py - 0.6, 1.2, 1.2);
+  }
+  for (const id in TOWN_DEFS) {
+    const d = TOWN_DEFS[id];
+    if (Math.abs(d.x - state.px) > 60 || Math.abs(d.y - state.py) > 60) continue;
+    g.save();
+    g.translate(d.x - state.px, d.y - state.py);
+    g.rotate(-yaw);
+    g.scale(1 / scale, 1 / scale);
+    g.font = 'bold 11px system-ui, sans-serif'; g.textAlign = 'center';
+    g.lineWidth = 3; g.strokeStyle = '#000'; g.fillStyle = '#ffe9a8';
+    const name = state.discovered[id] ? TOWNS[id].name : '?';
+    g.strokeText(name, 0, 4); g.fillText(name, 0, 4);
+    g.restore();
+  }
+  g.restore();
+  // Player arrow, pointing the way you face.
+  g.save();
+  g.translate(size / 2, size / 2);
+  g.rotate(yaw - state.face + Math.PI);
+  g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(0, -7); g.lineTo(5, 6); g.lineTo(0, 3); g.lineTo(-5, 6); g.closePath(); g.fill(); g.stroke();
+  g.restore();
+  // North marker on the rim.
+  const nx = size / 2 - Math.sin(yaw) * (size / 2 - 11), ny = size / 2 - Math.cos(yaw) * (size / 2 - 11);
+  g.font = 'bold 12px system-ui, sans-serif'; g.textAlign = 'center';
+  g.lineWidth = 3; g.strokeStyle = '#000'; g.fillStyle = '#ff6a5a';
+  g.strokeText('N', nx, ny + 4); g.fillText('N', nx, ny + 4);
+}
+
+// ---------------------------------------------------------------- panels
+function openPanel(kind, data = {}) {
+  buildMode = null;
+  panel = { kind, data };
+  $('panel').classList.remove('hidden');
+  $('panel-body').scrollTop = 0;
+  uiDirty = true;
+  renderPanel();
+}
+function closePanel() { panel = null; $('panel').classList.add('hidden'); }
+function togglePanel(kind) { if (panel && panel.kind === kind) closePanel(); else openPanel(kind); }
+
+const PANEL_VIEWS = {
+  pack: () => packHtml(), skills: () => skillsHtml(), craft: d => craftHtml(d), build: () => buildHtml(), struct: d => structHtml(d),
+  market: d => marketHtml(d), carriage: d => carriageHtml(d), empire: () => empireHtml(), help: () => helpHtml(),
+  offline: d => offlineHtml(d), map: () => mapHtml(),
+};
+function renderPanel() {
+  if (!panel) return;
+  const body = $('panel-body');
+  const keepScroll = body.scrollTop;
+  const [title, html] = PANEL_VIEWS[panel.kind](panel.data);
+  if (!title) { closePanel(); return; }
+  $('panel-title').textContent = title;
+  body.innerHTML = html;
+  body.scrollTop = keepScroll;
+  $('panel').classList.toggle('wide', ['map', 'help', 'offline'].includes(panel.kind));
+  if (panel.kind === 'map') drawWorldMap();
+}
+
+function packHtml() {
+  const ids = Object.keys(state.inv).sort((a, b) => itemName(a).localeCompare(itemName(b)));
+  const eq = equipStats();
+  let html = `<p class="small">Carrying ${packUsed()} / ${packCap()}. Click food to eat and gear to equip.</p>`;
+  html += ids.length ? ids.map(id => {
+    const it = ITEMS[id];
+    const tag = it.heal ? `<span class="tag">+${it.heal}hp</span>` : it.slot ? '<span class="tag">equip</span>' : it.tool ? '<span class="tag">tool</span>' : it.pack ? `<span class="tag">+${it.pack} space</span>` : it.rare ? '<span class="tag rare">rare</span>' : '';
+    return `<div class="item${it.heal || it.slot ? ' click' : ''}" data-item="${id}"><span>${esc(it.name)} ${tag}</span><span>x${fmt(state.inv[id])}</span></div>`;
+  }).join('') : '<p class="dim">Your pack is empty. Gather sticks from bushes and stones from loose stones outside town.</p>';
+  html += '<h3>Equipped</h3>';
+  for (const slot of ['weapon', 'shield', 'head', 'body']) {
+    const id = state.equip[slot];
+    html += `<div class="item${id ? ' click' : ''}" data-unequip="${slot}"><span class="dim">${cap(slot)}</span><span>${id ? esc(itemName(id)) : '-'}</span></div>`;
+  }
+  html += `<p class="small">Accuracy +${eq.acc} | Power +${eq.str} | Armour +${eq.def}</p><h3>Tools (the best one is used)</h3>`;
+  for (const t of ['axe', 'pickaxe', 'rod']) html += `<div class="item"><span class="dim">${cap(t)}</span><span>${bestTool(t) ? esc(itemName(bestTool(t))) : 'none'}</span></div>`;
+  html += `<h3>Combat style</h3><div class="row">${['attack', 'strength', 'defence'].map(s => `<button data-style="${s}" class="${state.style === s ? 'on' : ''}">${cap(s)}</button>`).join('')}</div>
+    <p class="small dim">Your style gets +3 effective levels and earns the XP.</p>`;
+  return ['Pack & Gear', html];
 }
 
 function skillsHtml() {
   let html = '';
-  for (const group of ['combat', 'gathering', 'refining']) {
+  for (const group of ['combat', 'gathering', 'building', 'refining']) {
     html += `<div class="group">${cap(group)}</div>`;
     for (const s of SKILLS.filter(k => k.group === group)) {
       const xp = state.xp[s.id], l = levelOf(xp);
       const lo = xpForLevel(l), hi = xpForLevel(l + 1);
       const pct = l >= MAX_LEVEL ? 100 : (xp - lo) / (hi - lo) * 100;
       html += `<div class="skill" title="${fmt(xp)} XP${l < MAX_LEVEL ? `, ${fmt(hi - xp)} to next level` : ''}">
-        <span>${s.name}</span><span class="lv">${l}</span>
-        <div class="xpbar"><div style="width:${pct}%"></div></div></div>`;
+        <span>${s.name}</span><span class="lv">${l}</span><div class="xpbar"><div style="width:${pct}%"></div></div></div>`;
     }
   }
-  return html;
+  html += `<p class="small dim">Kills: ${state.stats.kills} | Lifetime sales: ${fmt(state.stats.earned)}g</p>`;
+  return ['Skills', html];
 }
 
-function invHtml() {
-  const ids = Object.keys(state.inv).sort((a, b) => itemName(a).localeCompare(itemName(b)));
-  if (!ids.length) return '<div class="dim">Your pack is empty.</div>';
-  return '<div class="dim small">Click food to eat, gear to equip.</div>' + ids.map(id => {
-    const it = ITEMS[id];
-    const tag = it.heal ? `<span class="tag">+${it.heal}hp</span>` : it.slot ? '<span class="tag">equip</span>' : it.tool ? '<span class="tag">tool</span>' : it.rare ? '<span class="tag rare">rare</span>' : '';
-    return `<div class="item${it.heal || it.slot ? ' click' : ''}" data-item="${id}"><span>${esc(it.name)} ${tag}</span><span>x${fmt(state.inv[id])}</span></div>`;
-  }).join('');
-}
-
-function gearHtml() {
-  const eq = equipStats();
-  let html = '';
-  for (const slot of ['weapon', 'shield', 'head', 'body']) {
-    const id = state.equip[slot];
-    html += `<div class="item${id ? ' click' : ''}" data-unequip="${slot}"><span class="dim">${cap(slot)}</span><span>${id ? esc(itemName(id)) : '-'}</span></div>`;
+function craftHtml(data) {
+  const s = data.sid != null ? structById(data.sid) : null;
+  const ctx = craftContext(data.sid);
+  let recipes, title, intro;
+  if (s) {
+    const skill = structDef(s).station;
+    recipes = Object.values(RECIPES).filter(r => r.skill === skill);
+    title = structDef(s).name;
+    intro = `${skillName(skill)} level ${lvl(skill)}.${ctx.useStore ? ' Using goods from your pack and storehouse.' : ' Tip: build a Storehouse nearby to use its goods here.'}`;
+  } else {
+    recipes = Object.values(RECIPES).filter(r => r.hand);
+    title = 'Hand crafting';
+    intro = 'Simple things you can make anywhere. Press B to build a Workbench, Sawbench, Furnace, Anvil and Campfire to make much more.';
   }
-  html += `<div class="small">Accuracy +${eq.acc} | Power +${eq.str} | Armour +${eq.def}</div>`;
-  html += '<div class="group">Tools (best is used)</div>';
-  for (const t of ['axe', 'pickaxe', 'rod']) html += `<div class="item"><span class="dim">${cap(t)}</span><span>${bestTool(t) ? esc(itemName(bestTool(t))) : 'none'}</span></div>`;
-  html += `<div class="group">Combat style</div>
-    <div class="row">${['attack', 'strength', 'defence'].map(s => `<button data-style="${s}" class="${state.style === s ? 'on' : ''}">${cap(s)}</button>`).join('')}</div>
-    <div class="small dim">Your style gets +3 effective levels and earns the XP.</div>
-    <div class="small">Kills: ${state.stats.kills} | Lifetime sales: ${fmt(state.stats.earned)}g</div>`;
-  return html;
-}
-
-// ---------------------------------------------------------------- modals
-function openStation(id) {
-  if (id === 'market') openModal('market');
-  else if (id === 'hall') openModal('empire', {});
-  else openModal('craft', { station: id });
-}
-function openModal(kind, data = {}) { modal = { kind, data }; $('modal').classList.remove('hidden'); renderModal(); }
-function closeModal() { modal = null; $('modal').classList.add('hidden'); }
-
-function renderModal() {
-  const body = $('modal-body');
-  const keepScroll = body.scrollTop;
-  let html = '';
-  if (modal.kind === 'craft') html = craftHtml(modal.data.station);
-  else if (modal.kind === 'market') html = marketHtml();
-  else if (modal.kind === 'empire') html = empireHtml();
-  else if (modal.kind === 'help') html = helpHtml();
-  else if (modal.kind === 'offline') html = offlineHtml(modal.data);
-  body.innerHTML = html;
-  body.scrollTop = keepScroll;
-  if (modal.data.focus) {
-    const el = document.getElementById('b-' + modal.data.focus);
-    if (el) el.scrollIntoView({ block: 'center' });
-    modal.data.focus = null;
-  }
-}
-
-function craftHtml(stationId) {
-  const st = STATIONS[stationId];
-  const recipes = Object.values(RECIPES).filter(r => r.skill === st.skill);
-  let html = `<h2>${st.name}</h2><p class="dim">${st.desc} ${skillName(st.skill)} level ${lvl(st.skill)}.</p><table class="list">`;
+  let html = `<p class="small dim">${intro}</p><table class="list">`;
   for (const r of recipes) {
-    const out = Object.keys(r.outputs)[0];
+    const out = Object.keys(r.outputs)[0], it = ITEMS[out];
     const locked = lvl(r.skill) < r.level;
     let maxN = Infinity;
-    for (const k in r.inputs) maxN = Math.min(maxN, Math.floor(have(k) / r.inputs[k]));
-    const ins = Object.entries(r.inputs).map(([k, v]) => `<span class="${have(k) >= v ? '' : 'bad'}">${v} ${esc(itemName(k))} (${have(k)})</span>`).join(', ');
-    const it = ITEMS[out];
-    const stats = it.stats ? ` <span class="dim">[${Object.entries(it.stats).map(([k, v]) => `${k} +${v}`).join(' ')}]</span>` : '';
-    html += `<tr class="${locked ? 'locked' : ''}"><td><b>${esc(it.name)}</b>${stats}<br><span class="small">${ins}</span></td>
+    for (const k in r.inputs) maxN = Math.min(maxN, Math.floor(count(k, ctx.useStore) / r.inputs[k]));
+    const stats = it.stats ? ` <span class="dim">[${Object.entries(it.stats).map(([k, v]) => `${k} +${v}`).join(' ')}]</span>` : it.pack ? ` <span class="dim">[+${it.pack} pack space]</span>` : '';
+    html += `<tr class="${locked ? 'locked' : ''}"><td><b>${esc(it.name)}</b>${stats}<br><span class="small">${costHtml(r.inputs, ctx.useStore)}</span></td>
       <td class="small">Lvl ${r.level}<br>${r.xp} xp</td><td class="btns">${locked ? 'Locked' :
-      `<button data-craft="${r.id}" data-n="1" ${maxN ? '' : 'disabled'}>1</button><button data-craft="${r.id}" data-n="5" ${maxN ? '' : 'disabled'}>5</button><button data-craft="${r.id}" data-n="${maxN}" ${maxN ? '' : 'disabled'}>All (${maxN})</button>`}</td></tr>`;
+      `<button data-craft="${r.id}" data-n="1" ${maxN ? '' : 'disabled'}>1</button><button data-craft="${r.id}" data-n="${maxN}" ${maxN ? '' : 'disabled'}>All (${maxN})</button>`}</td></tr>`;
   }
-  return html + '</table>';
+  return [title, html + '</table>'];
 }
 
-function trend(id) {
-  const m = state.market, d = m.mult[id] - m.prev[id];
+function buildHtml() {
+  const useStore = nearStorehouse(state.px, state.py);
+  let html = `<p class="small dim">Pick something, then click on the ground to place it. Placing it uses the materials. Then press E at the site to hammer it together.
+    Construction level ${lvl('construction')}.</p><table class="list">`;
+  for (const type in STRUCTS) {
+    const d = STRUCTS[type];
+    const locked = lvl('construction') < d.con;
+    const ok = !locked && hasAll(d.cost, useStore);
+    html += `<tr class="${locked ? 'locked' : ''}"><td><b>${d.name}</b> <span class="dim small">${d.size}x${d.size}</span><br>
+      <span class="small dim">${esc(d.desc)}</span><br><span class="small">${costHtml(d.cost, useStore)}</span></td>
+      <td class="small">Con ${d.con}</td><td class="btns">${locked ? 'Locked' : `<button data-build="${type}" ${ok ? '' : 'disabled'}>Place</button>`}</td></tr>`;
+  }
+  return ['Build', html + '</table>'];
+}
+
+function structHtml(data) {
+  const s = structById(data.sid);
+  if (!s) return [null, ''];
+  const def = structDef(s);
+  let html = `<p class="small dim">${esc(def.desc)}</p>`;
+  if (s.pending) html += `<p class="warn">${s.level ? 'Upgrade' : 'Construction'} ${buildPct(s)}% done. Press E at it to keep building.</p>`;
+  if (!s.level) return [`${def.name} (site)`, html];
+  html += `<p>Level ${s.level} / ${STRUCT_MAX_LEVEL}</p>`;
+  if (def.station) html += `<p><button data-sact="use" class="big">Use the ${def.name}</button></p>`;
+  if (def.workers) {
+    html += `<h3>Workers</h3><p class="small">${s.workers}/${def.workers[s.level - 1]} working. Beds used: ${staffCount()}/${housingCap()}.
+      <button data-sact="hire">Hire (${EMPIRE.hireCost(workerTotal())}g)</button><button data-sact="fire">Fire</button></p>`;
+    if (!housingCap()) html += '<p class="small warn">Workers need beds. Build a Cottage first.</p>';
+    if (!storeCap()) html += '<p class="small warn">Workers deliver to a Storehouse. Build one first.</p>';
+    if (def.gather) {
+      const opts = Object.keys(RESOURCES).filter(r => RESOURCES[r].skill === def.gather);
+      html += `<p class="small">Gathering: <b>${s.out ? RESOURCES[s.out].name : 'nothing'}</b> <button data-sact="cycle">Change</button></p>
+        <p class="small dim">In range: ${opts.map(r => `${richness(s, r)} ${RESOURCES[r].name.toLowerCase()}`).join(', ')}. Full speed needs 5 or more.</p>`;
+    } else {
+      const r = s.recipe && RECIPES[s.recipe];
+      html += `<p class="small">Workers make: <b>${r ? esc(itemName(Object.keys(r.outputs)[0])) : 'nothing'}</b> ${r ? `<span class="dim">(uses ${costText(r.inputs)} from the storehouse)</span>` : ''}
+        <button data-sact="cycle">Change</button> <button data-sact="toggle">${s.on ? 'Running' : 'Paused'}</button></p>`;
+    }
+    if (s.blocked === 'materials') html += '<p class="small bad">Out of materials in the storehouse.</p>';
+    if (s.blocked === 'full') html += '<p class="small bad">The storehouse is full.</p>';
+    if (s.damaged > 0) html += `<p class="small bad">Wrecked by bandits. Back in ${Math.ceil(s.damaged)}s.</p>`;
+  }
+  if (def.guards) {
+    html += `<h3>Guards</h3><p class="small">${s.guards.length}/${def.guards[s.level - 1]} guards (defence ${s.guards.reduce((a, g) => a + EMPIRE.guardPower(g), 0)}).
+      Each needs a sword from your pack and ${EMPIRE.guardCost}g. <button data-sact="guard">Hire guard</button><button data-sact="dismiss">Dismiss</button></p>`;
+  }
+  if (def.housing) html += `<p>Beds here: ${def.housing[s.level - 1]}. Beds used: ${staffCount()}/${housingCap()}.${state.home === s.id ? ' You respawn here.' : ''}</p>`;
+  if (def.storage) {
+    const items = Object.keys(state.store).sort((a, b) => itemName(a).localeCompare(itemName(b)));
+    html += `<h3>Stock: ${storeUsed()} / ${storeCap()}</h3><p class="small dim">All your storehouses share one stock.</p>
+      <button data-sact="deposit" data-arg="all">Deposit all materials</button><table class="list">`;
+    html += items.map(id => `<tr><td>${esc(itemName(id))}</td><td>${fmt(state.store[id])}</td>
+      <td class="btns"><button data-sact="withdraw" data-arg="${id}:1">Take 1</button><button data-sact="withdraw" data-arg="${id}:10">10</button><button data-sact="withdraw" data-arg="${id}:999999">All</button></td></tr>`).join('');
+    html += '</table><h3>Your pack</h3><table class="list">';
+    html += Object.keys(state.inv).map(id => `<tr><td>${esc(itemName(id))}</td><td>${fmt(have(id))}</td>
+      <td class="btns"><button data-sact="deposit" data-arg="${id}:1">Store 1</button><button data-sact="deposit" data-arg="${id}:999999">All</button></td></tr>`).join('');
+    html += '</table>';
+  }
+  if (s.level < STRUCT_MAX_LEVEL && !s.pending) {
+    const cost = upgradeCost(s), useStore = nearStorehouse(s.x, s.y), need = def.con + s.level * 5;
+    html += `<h3>Upgrade to level ${s.level + 1}</h3><p class="small">${costHtml(cost, useStore)}. Needs Construction ${need}.
+      <button data-sact="upgrade" ${hasAll(cost, useStore) && lvl('construction') >= need ? '' : 'disabled'}>Upgrade</button></p>`;
+  }
+  html += '<p><button data-sact="demolish" class="danger">Demolish</button></p>';
+  return [def.name, html];
+}
+
+function trend(town, id) {
+  const m = state.markets[town], d = m.mult[id] - m.prev[id];
   return d > 0.01 ? '<span class="up">&#9650;</span>' : d < -0.01 ? '<span class="down">&#9660;</span>' : '<span class="dim">-</span>';
 }
 
-function marketHtml() {
-  const m = state.market;
-  let html = `<h2>Ironhold Market</h2><p class="dim">Prices drift every 30 seconds. Selling a lot at once pushes the price down; it recovers over time.</p>`;
-  if (m.event) html += `<p class="gold">News: ${m.event.boom ? 'Royal order' : 'Glut'} on ${esc(itemName(m.event.id))}!</p>`;
+function marketHtml(data) {
+  const town = data.town, info = TOWNS[town], m = state.markets[town];
+  const likes = Object.entries(info.buy).filter(([k, v]) => k !== 'default' && v > 1).map(([k]) => k);
+  const dislikes = Object.entries(info.buy).filter(([k, v]) => k !== 'default' && v < 1).map(([k]) => k);
+  let html = `<p class="small dim">${esc(info.desc)}</p>`;
+  if (likes.length) html += `<p class="small">Pays extra for: <b class="good">${likes.join(', ')}</b></p>`;
+  if (dislikes.length) html += `<p class="small">Pays little for: <span class="bad">${dislikes.join(', ')}</span></p>`;
+  if (m.event) html += `<p class="gold small">News: ${m.event.boom ? 'big order' : 'glut'} on ${esc(itemName(m.event.id))}!</p>`;
   html += '<h3>Sell</h3><table class="list">';
-  const ids = Object.keys(state.inv).filter(id => !ITEMS[id].tool || ITEMS[id].tier > 0).sort((a, b) => sellPrice(b) * have(b) - sellPrice(a) * have(a));
+  const ids = Object.keys(state.inv).sort((a, b) => sellPrice(town, b) * have(b) - sellPrice(town, a) * have(a));
   if (!ids.length) html += '<tr><td class="dim">Nothing to sell.</td></tr>';
   for (const id of ids) {
-    html += `<tr><td>${esc(itemName(id))} <span class="dim">x${fmt(have(id))}</span></td><td>${sellPrice(id)}g ${trend(id)}</td>
+    html += `<tr><td>${esc(itemName(id))} <span class="dim">x${fmt(have(id))}</span></td><td>${sellPrice(town, id)}g ${trend(town, id)}</td>
       <td class="btns"><button data-sell="${id}" data-n="1">1</button><button data-sell="${id}" data-n="10">10</button><button data-sell="${id}" data-n="999999">All</button></td></tr>`;
   }
-  html += '</table><button data-sellall="1">Sell all raw &amp; refined goods (keeps gear, food, tools)</button><h3>Buy</h3><table class="list">';
-  for (const id of BUYABLE) {
-    html += `<tr><td>${esc(itemName(id))}</td><td>${buyPrice(id)}g ${trend(id)}</td>
+  html += '</table><button data-sellall="1">Sell all goods (keeps tools, gear and food)</button><h3>Buy</h3><table class="list">';
+  for (const id of info.sells) {
+    html += `<tr><td>${esc(itemName(id))}</td><td>${buyPrice(town, id)}g ${trend(town, id)}</td>
       <td class="btns"><button data-buy="${id}" data-n="1">1</button><button data-buy="${id}" data-n="10">10</button></td></tr>`;
   }
-  return html + '</table>';
+  return [`${info.name} Market`, html + '</table>'];
+}
+
+function carriageHtml(data) {
+  let html = '<p class="small dim">Ride to any town you have already visited.</p><table class="list">';
+  for (const id in TOWNS) {
+    if (id === data.town) continue;
+    html += `<tr><td><b>${TOWNS[id].name}</b><br><span class="small dim">${esc(TOWNS[id].desc)}</span></td><td class="btns">${state.discovered[id]
+      ? `<button data-travel="${id}">${carriageFee(data.town, id)}g</button>` : '<span class="dim small">Not visited yet</span>'}</td></tr>`;
+  }
+  return ['Carriage', html + '</table>'];
 }
 
 function empireHtml() {
-  const E = state.empire;
-  let html = `<h2>Guild Hall: Your Empire</h2>
-    <p>Gold: <b class="gold">${fmt(state.gold)}</b> | Wages: ${wagesPerMin()}g/min ${E.unpaid ? '<b class="bad">UNPAID: workers idle!</b>' : ''}
-    | Bandit threat: ${Math.floor(state.threat)}/100</p>
-    <p class="dim small">Workers produce ${EMPIRE.ratePerWorker}/min each (+25% per building level), even while you're offline (up to ${EMPIRE.offlineCapHours}h).
-    Camps in the wilds fill a stockpile you must collect, and bandits raid them. Each guard costs ${EMPIRE.guardCost}g plus a sword, and more sword tiers mean stronger guards.
-    Killing bandits lowers the threat. Town works use goods from your pack.</p>
-    <button data-collectall="1">Collect from all camps</button><h3>Camps (wilds)</h3>`;
-  for (const id in CAMPS) {
-    const c = E.camps[id], def = CAMPS[id];
-    html += `<div class="card" id="b-${id}"><div class="cardhead"><b>${def.name}</b>${c.built ? ` <span>Lvl ${c.level}</span>` : ''}</div>`;
-    if (!c.built) {
-      html += `<div class="small">Gathers ${skillName(def.skill).toLowerCase()} resources. Cost: ${costText(def.cost)}</div>
-        <button data-emp="build" data-id="${id}" ${hasAll(def.cost) ? '' : 'disabled'}>Build</button></div>`;
-      continue;
-    }
-    const stored = campStored(c), capN = EMPIRE.campCap(c.level);
-    const defense = c.guards.reduce((a, t) => a + EMPIRE.guardPower(t), 0);
-    html += `<div class="small">Output: <b>${c.out ? RESOURCES[c.out].name : 'none'}</b> <button data-emp="cycle" data-id="${id}">Change</button></div>
-      <div class="small">Workers: ${c.workers}/${EMPIRE.maxWorkers(c.level)}
-        <button data-emp="hire" data-id="${id}">Hire (${EMPIRE.hireCost(c.workers)}g)</button><button data-emp="fire" data-id="${id}">Fire</button></div>
-      <div class="small">Guards: ${c.guards.length}/${EMPIRE.maxGuards(c.level)} (defence ${defense})
-        <button data-emp="guard" data-id="${id}">Hire guard</button><button data-emp="dismiss" data-id="${id}">Dismiss</button></div>
-      <div class="small">Stockpile: ${stored}/${capN} ${Object.entries(c.store).filter(([, v]) => v > 0).map(([k, v]) => `${v} ${esc(itemName(k))}`).join(', ')}
-        <button data-emp="collect" data-id="${id}">Collect</button></div>`;
-    html += upgradeHtml(id, c, def) + '</div>';
+  let html = `<p>Gold <b class="gold">${fmt(state.gold)}</b> | Wages ${wagesPerMin()}g/min ${state.unpaid ? '<b class="bad">UNPAID!</b>' : ''}<br>
+    Beds ${staffCount()}/${housingCap()} | Storage ${storeUsed()}/${storeCap()} | Bandit threat ${Math.floor(state.threat)}%</p>
+    <p class="small dim">Workers keep going while you're offline (up to ${EMPIRE.offlineCapHours}h). Bandits raid camps and storehouses; guard towers protect everything within ${EMPIRE.towerRadius} tiles.
+    Walk to a building and press E to manage it.</p>`;
+  if (!state.structs.length) html += '<p>You haven\'t built anything yet. Press <kbd>B</kbd> to start.</p>';
+  html += '<table class="list">';
+  for (const s of state.structs) {
+    const def = structDef(s), c = structCenter(s);
+    let status = s.pending ? `<span class="warn">${s.level ? 'Upgrading' : 'Building'} ${buildPct(s)}%</span>` : `Lvl ${s.level}`;
+    if (s.workers) status += ` | ${s.workers} workers`;
+    if (s.guards && s.guards.length) status += ` | ${s.guards.length} guards`;
+    if (def.gather && s.out) status += ` | ${RESOURCES[s.out].name}`;
+    if (def.station && s.recipe && s.workers) status += ` | ${esc(itemName(Object.keys(RECIPES[s.recipe].outputs)[0]))}`;
+    if (s.damaged > 0) status += ' <span class="bad">wrecked</span>';
+    if (s.blocked) status += ` <span class="bad">${s.blocked === 'full' ? 'storage full' : 'no materials'}</span>`;
+    html += `<tr><td><b>${def.name}</b><br><span class="small">${status}</span></td><td class="small dim">${Math.round(Math.hypot(c.x - state.px, c.y - state.py))} tiles away</td></tr>`;
   }
-  html += '<h3>Works (inside the walls, safe)</h3>';
-  for (const id in WORKS) {
-    const k = E.works[id], def = WORKS[id];
-    html += `<div class="card" id="b-${id}"><div class="cardhead"><b>${def.name}</b>${k.built ? ` <span>Lvl ${k.level}</span>` : ''}</div>`;
-    if (!k.built) {
-      html += `<div class="small">Automates ${skillName(def.skill).toLowerCase()}. Cost: ${costText(def.cost)}</div>
-        <button data-emp="build" data-id="${id}" ${hasAll(def.cost) ? '' : 'disabled'}>Build</button></div>`;
-      continue;
-    }
-    const r = k.recipe && RECIPES[k.recipe];
-    html += `<div class="small">Making: <b>${r ? esc(itemName(Object.keys(r.outputs)[0])) : 'none'}</b> ${r ? `<span class="dim">(uses ${costText(r.inputs)})</span>` : ''}
-        <button data-emp="cycle" data-id="${id}">Change</button>
-        <button data-emp="toggle" data-id="${id}">${k.on ? 'Running' : 'Paused'}</button>
-        ${k.starved && k.on && k.workers ? '<span class="bad">Out of materials!</span>' : ''}</div>
-      <div class="small">Workers: ${k.workers}/${EMPIRE.maxWorkers(k.level)}
-        <button data-emp="hire" data-id="${id}">Hire (${EMPIRE.hireCost(k.workers)}g)</button><button data-emp="fire" data-id="${id}">Fire</button></div>`;
-    html += upgradeHtml(id, k, def) + '</div>';
-  }
-  return html + '<p class="dim small">You can only assign outputs and recipes that you know yourself. Train your skills to unlock more.</p>';
+  html += '</table>';
+  if (Object.keys(state.store).length) html += `<h3>Storehouse stock</h3><p class="small">${Object.entries(state.store).map(([k, v]) => `${v} ${esc(itemName(k))}`).join(', ')}</p>`;
+  return ['Your Empire', html];
 }
 
-function upgradeHtml(id, b, def) {
-  if (b.level >= EMPIRE.maxLevel) return '<div class="small dim">Max level</div>';
-  const cost = upgradeCost(def.cost, b.level);
-  return `<div class="small">Upgrade to lvl ${b.level + 1}: ${costText(cost)} <button data-emp="upgrade" data-id="${id}" ${hasAll(cost) ? '' : 'disabled'}>Upgrade</button></div>`;
+function mapHtml() {
+  return ['World Map', `<canvas id="worldmap" width="${W * 2}" height="${H * 2}"></canvas>
+    <p class="small dim">The white dot is you. Yellow squares are your buildings. Towns you haven't visited show as "?".</p>`];
+}
+function drawWorldMap() {
+  const cv = $('worldmap');
+  if (!cv) return;
+  const g = cv.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  g.drawImage(mapImage, 0, 0, W * 2, H * 2);
+  for (const s of state.structs) { g.fillStyle = '#ffd84a'; g.fillRect(s.x * 2 - 1, s.y * 2 - 1, 5, 5); }
+  g.font = 'bold 14px system-ui, sans-serif'; g.textAlign = 'center'; g.lineWidth = 3; g.strokeStyle = '#000';
+  for (const id in TOWN_DEFS) {
+    const d = TOWN_DEFS[id], name = state.discovered[id] ? TOWNS[id].name : '?';
+    g.fillStyle = '#ffe9a8';
+    g.fillRect(d.x * 2 - 4, d.y * 2 - 4, 8, 8);
+    g.strokeText(name, d.x * 2, d.y * 2 - 9); g.fillText(name, d.x * 2, d.y * 2 - 9);
+  }
+  g.fillStyle = '#fff';
+  g.beginPath(); g.arc(state.px * 2, state.py * 2, 5, 0, Math.PI * 2); g.fill(); g.stroke();
 }
 
 function helpHtml() {
-  return `<h2>Ironhold</h2>
-  <p>You are one peasant with a worn axe and big dreams. Gather, refine, sell, hire, and grow a medieval industrial empire.</p>
+  return ['How to play', `
+  <p>You arrive in Ironhold with empty pockets and big dreams. Gather, craft, build, trade, and grow a medieval industrial empire.</p>
   <h3>Controls</h3>
-  <p><b>Click or tap</b> anywhere to walk there. Click a tree, rock, fishing spot, building or monster to walk over and use it.
-  <b>Arrows / WASD</b> also move, and walking into things uses them. Gathering repeats until you move.</p>
-  <p><b>F</b> eat food | <b>C</b> cycle combat style | <b>E</b> empire panel | <b>?</b> help | <b>Esc</b> close |
-  <b>Mouse wheel</b> or <b>+ / -</b> zoom. Hover over things to see what they are.</p>
-  <h3>What you'll see</h3>
-  <ul>
-    <li><b>Trees:</b> pines near town, round oaks further out, tall teal ironwoods in the deep wilds.</li>
-    <li><b>Rocks:</b> the coloured nuggets show the ore: orange copper, pale iron, black coal.</li>
-    <li><b>Fishing spots:</b> rippling rings on the water. Bluer rings are better fish.</li>
-    <li><b>Town:</b> Market stall, Guild Hall, Furnace, Anvil, Sawbench and Cook fire, all labelled.</li>
-    <li><b>Monsters:</b> small green goblins, grey wolves, red-hooded bandits, and huge purple ogres. A red <b>!</b> means it's hunting you.</li>
-  </ul>
+  <p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move, hold <kbd>Shift</kbd> to run | <b>drag the mouse</b> to swing the camera | <b>mouse wheel</b> to zoom<br>
+  <kbd>E</kbd> use whatever is in front of you (or click it) | <kbd>F</kbd> eat | <kbd>X</kbd> combat style<br>
+  <kbd>B</kbd> build | <kbd>C</kbd> craft | <kbd>I</kbd> pack | <kbd>K</kbd> skills | <kbd>G</kbd> empire | <kbd>M</kbd> map | <kbd>H</kbd> help | <kbd>Esc</kbd> close</p>
   <h3>Getting started</h3>
   <ol>
-    <li>Leave town by the west gate to the pine grove and chop logs. East of town is copper. South is a fishing pond.</li>
-    <li>Saw logs into planks (Sawbench), smelt ore into bars (Furnace), smith bars into gear (Anvil), and cook fish (Cook fire).</li>
-    <li>Sell at the Market. Watch for price swings and royal orders.</li>
-    <li>Build a Lumber Camp at the Guild Hall or by walking to the signposted camp site, then hire workers.</li>
-    <li>Bandits raid camps. Smith swords to arm guards. Wolves drop pelts for platebodies, and ogres in the deep wilds drop star fragments for starmetal.</li>
+    <li>Leave town and gather <b>sticks</b> from bushes and <b>stones</b> from loose stones. Walk up to them and press <kbd>E</kbd>.</li>
+    <li>Press <kbd>C</kbd> and craft a <b>stone axe</b> and a <b>stone pickaxe</b>.</li>
+    <li>Chop pine trees. Then press <kbd>B</kbd> and build a <b>Workbench</b> and a <b>Sawbench</b> wherever you like.</li>
+    <li>Work towards a <b>Storehouse</b>, a <b>Furnace</b> and an <b>Anvil</b>. Smith copper tools to chop and mine faster.</li>
+    <li>Build a <b>Cottage</b> for beds, then <b>Lumber Camps</b>, <b>Mines</b> and <b>Fishing Docks</b> near resources, and hire workers.</li>
+    <li>Sell goods in towns. Each town pays more for different things: timber in the mountain town, metal at the forest lodge, rare loot at the black market.</li>
+    <li>Bandits raid camps and storehouses. Smith swords and build <b>Guard Towers</b>.</li>
   </ol>
-  <p class="dim small">Progress saves to this browser automatically every 15 seconds.</p>
-  <button data-close="1">Begin</button>`;
+  <h3>The world</h3>
+  <p>Ironhold sits in the middle. North over the mountains is <b>Stonedeep</b>, and past it the ogre-haunted highlands.
+  West is the great forest and <b>Thornwood</b>. South-west on the coast is <b>Saltmere</b>. East across the badlands is the bandit market, <b>Rat's Nest</b>.
+  Once you've visited a town, its carriage can take you back there.</p>
+  <p class="small dim">Progress saves to this browser every 15 seconds.</p>
+  <button data-close="1">Let's go</button>`];
 }
 
 function offlineHtml(r) {
   const h = Math.floor(r.seconds / 3600), mn = Math.floor(r.seconds % 3600 / 60);
   const prod = Object.entries(r.produced).map(([k, v]) => `<li>+${fmt(v)} ${esc(itemName(k))}</li>`).join('');
   const used = Object.entries(r.consumed).map(([k, v]) => `<li>-${fmt(v)} ${esc(itemName(k))}</li>`).join('');
-  return `<h2>Welcome back!</h2><p>You were away for ${h}h ${mn}m${r.seconds >= EMPIRE.offlineCapHours * 3600 ? ' (capped)' : ''}.</p>
-    ${prod ? `<h3>Your workers produced</h3><ul>${prod}</ul>` : '<p class="dim">Your workers produced nothing. Build camps at the Guild Hall!</p>'}
-    ${used ? `<h3>Materials used by works</h3><ul>${used}</ul>` : ''}
+  return ['Welcome back!', `<p>You were away for ${h}h ${mn}m${r.seconds >= EMPIRE.offlineCapHours * 3600 ? ' (capped)' : ''}.</p>
+    ${prod ? `<h3>Your workers produced</h3><ul>${prod}</ul>` : '<p class="dim">Your workers produced nothing.</p>'}
+    ${used ? `<h3>Materials used</h3><ul>${used}</ul>` : ''}
     ${r.wages ? `<p>Wages paid: ${fmt(r.wages)}g</p>` : ''}
     ${r.events.length ? `<h3>Events</h3><ul>${r.events.slice(0, 12).map(e => `<li>${esc(e)}</li>`).join('')}${r.events.length > 12 ? `<li>...and ${r.events.length - 12} more</li>` : ''}</ul>` : ''}
-    <p class="dim small">Camp goods wait in each camp's stockpile. Collect them at the Guild Hall.</p>
-    <button data-close="1">Continue</button>`;
+    <p class="small dim">Everything went into your storehouse.</p><button data-close="1">Continue</button>`];
 }
 
 // ---------------------------------------------------------------- input
-const KEYS = {
-  ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
-  w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0], W: [0, -1], S: [0, 1], A: [-1, 0], D: [1, 0],
-};
-
-function onKey(e) {
+const MOVE_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'];
+function onKeyDown(e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.key === 'Escape') { closeModal(); return; }
-  if (modal) return;
-  if (KEYS[e.key]) { e.preventDefault(); tryMove(...KEYS[e.key]); return; }
   const k = e.key.toLowerCase();
-  if (k === 'f') eat();
-  else if (k === 'c') { const order = ['attack', 'strength', 'defence']; state.style = order[(order.indexOf(state.style) + 1) % 3]; log(`Combat style: ${cap(state.style)}.`); }
-  else if (k === 'e') openModal('empire', {});
-  else if (k === '?' || k === 'h') openModal('help');
+  if (MOVE_KEYS.includes(k)) {
+    keys.add(k);
+    if (k.startsWith('arrow')) e.preventDefault();
+    return;
+  }
+  if (e.repeat) return;
+  if (k === 'escape') { if (buildMode) buildMode = null; else closePanel(); return; }
+  if (k === 'e') interact(interactTarget);
+  else if (k === 'f') eat();
+  else if (k === 'x') { const order = ['attack', 'strength', 'defence']; state.style = order[(order.indexOf(state.style) + 1) % 3]; log(`Combat style: ${cap(state.style)}.`); }
+  else if (k === 'b') togglePanel('build');
+  else if (k === 'c') toggleCraft();
+  else if (k === 'i') togglePanel('pack');
+  else if (k === 'k') togglePanel('skills');
+  else if (k === 'g') togglePanel('empire');
+  else if (k === 'm') togglePanel('map');
+  else if (k === 'h' || k === '?') togglePanel('help');
   else return;
   uiDirty = true;
 }
+function onKeyUp(e) {
+  const k = e.key.toLowerCase();
+  keys.delete(k);
+  // Shift changes e.key for letters, so clear both cases.
+  if (k.length === 1) keys.delete(k.toUpperCase());
+}
+function toggleCraft() { if (panel && panel.kind === 'craft') closePanel(); else openPanel('craft', {}); }
 
-function onModalClick(e) {
-  const b = e.target.closest('button');
-  if (!b) return;
-  const d = b.dataset;
-  if (d.close) closeModal();
-  else if (d.craft) startCraft(d.craft, +d.n);
-  else if (d.sell) sell(d.sell, +d.n);
-  else if (d.sellall) {
-    for (const id of Object.keys(state.inv)) {
-      const it = ITEMS[id];
-      if (!it.tool && !it.slot && !it.heal) sell(id, have(id));
-    }
-  } else if (d.buy) buy(d.buy, +d.n);
-  else if (d.emp) empireAction(d.emp, d.id);
-  else if (d.collectall) collectAll();
+function onPanelClick(e) {
+  const b = e.target.closest('button, [data-item], [data-unequip]');
+  if (!b || !panel) return;
+  const d = b.dataset, town = panel.data.town;
+  if (d.close) closePanel();
+  else if (d.craft) startCraft(d.craft, +d.n, panel.data.sid);
+  else if (d.build) startBuildMode(d.build);
+  else if (d.sact) structAction(d.sact, structById(panel.data.sid), d.arg);
+  else if (d.sell) sell(town, d.sell, +d.n);
+  else if (d.sellall) { for (const id of Object.keys(state.inv)) { const it = ITEMS[id]; if (!it.tool && !it.slot && !it.heal && !it.pack) sell(town, id, have(id)); } }
+  else if (d.buy) buy(town, d.buy, +d.n);
+  else if (d.travel) travel(town, d.travel);
+  else if (d.style) state.style = d.style;
+  else if (d.item) { if (ITEMS[d.item].heal) eat(d.item); else if (ITEMS[d.item].slot) equip(d.item); }
+  else if (d.unequip) unequip(d.unequip);
   uiDirty = true;
-}
-
-function onSideClick(e) {
-  const tab = e.target.closest('.tab');
-  if (tab) { sidebarTab = tab.dataset.tab; uiDirty = true; return; }
-  const it = e.target.closest('[data-item]');
-  if (it) { const id = it.dataset.item; if (ITEMS[id].heal) eat(id); else if (ITEMS[id].slot) equip(id); uiDirty = true; return; }
-  const un = e.target.closest('[data-unequip]');
-  if (un) { unequip(un.dataset.unequip); uiDirty = true; return; }
-  const st = e.target.closest('[data-style]');
-  if (st) { state.style = st.dataset.style; uiDirty = true; }
-}
-
-function setupDpad() {
-  let timer = null;
-  const stop = () => { clearInterval(timer); timer = null; };
-  for (const b of document.querySelectorAll('[data-dir]')) {
-    const dir = b.dataset.dir.split(',').map(Number);
-    b.addEventListener('pointerdown', e => {
-      e.preventDefault();
-      tryMove(...dir);
-      stop();
-      timer = setInterval(() => tryMove(...dir), 130);
-    });
-    b.addEventListener('pointerup', stop);
-    b.addEventListener('pointerleave', stop);
-  }
-  $('btn-eat').addEventListener('click', () => { eat(); uiDirty = true; });
 }
 
 // ---------------------------------------------------------------- boot
@@ -1248,20 +1482,22 @@ function init() {
   const loaded = load();
   if (!loaded) state = newState();
   marketInit();
-  if (state.x == null || blocked(state.x, state.y)) { state.x = TOWN.x; state.y = TOWN.y; }
+  indexStructs();
+  if (collides(state.px, state.py, Date.now())) { state.px = TOWN_DEFS.ironhold.x; state.py = TOWN_DEFS.ironhold.y + 3; }
   state.hp = clamp(state.hp, 1, maxHp());
+  buildMapImage();
 
   const report = loaded ? runOffline() : null;
-  for (let k = 0; k < 55; k++) spawnMonster(false);
+  for (let k = 0; k < 200; k++) spawnMonster(true);
 
-  document.addEventListener('keydown', onKey);
-  $('modal-body').addEventListener('click', onModalClick);
-  $('modal-close').addEventListener('click', closeModal);
-  $('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
-  $('side').addEventListener('click', onSideClick);
-  Render3D.init($('view'));
-  $('btn-empire').addEventListener('click', () => openModal('empire', {}));
-  $('btn-help').addEventListener('click', () => openModal('help'));
+  document.addEventListener('keydown', onKeyDown);
+  document.addEventListener('keyup', onKeyUp);
+  window.addEventListener('blur', () => keys.clear());
+  $('panel-body').addEventListener('click', onPanelClick);
+  $('panel-close').addEventListener('click', closePanel);
+  for (const b of document.querySelectorAll('[data-open]')) {
+    b.addEventListener('click', () => { if (b.dataset.open === 'craft') toggleCraft(); else togglePanel(b.dataset.open); uiDirty = true; });
+  }
   $('btn-save').addEventListener('click', () => { save(); log('Game saved.', 'dim'); });
   $('btn-reset').addEventListener('click', () => {
     if (!confirm('Erase your save and start over?')) return;
@@ -1271,11 +1507,12 @@ function init() {
   });
   window.addEventListener('beforeunload', save);
   document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
-  setupDpad();
 
-  log(loaded ? 'Welcome back to Ironhold.' : 'You arrive in Ironhold with a worn axe, a worn pickaxe and a fishing rod.', 'level');
-  if (report) openModal('offline', report);
-  else if (!state.seenHelp) { state.seenHelp = true; openModal('help'); }
+  Render3D.init($('view'));
+
+  log(loaded ? 'Welcome back to Ironhold.' : 'You arrive in Ironhold with nothing but the clothes on your back.', 'level');
+  if (report) openPanel('offline', report);
+  else if (!state.seenHelp) { state.seenHelp = true; openPanel('help'); }
 
   lastSave = Date.now();
   setInterval(update, TICK);
