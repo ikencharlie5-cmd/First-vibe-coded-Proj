@@ -45,14 +45,14 @@ function newState() {
   for (const s of SKILLS) xp[s.id] = 0;
   xp.hitpoints = xpForLevel(10);
   return {
-    v: 3, px: HOMESTEAD.x + 0.5, py: HOMESTEAD.y + 2, face: Math.PI, camYaw: 0, hp: 10, gold: 20, xp,
+    v: 4, px: HOMESTEAD.x + 0.5, py: HOMESTEAD.y + 2, face: Math.PI, camYaw: 0, hp: 10, gold: 20, xp,
     inv: {}, equip: { weapon: null, shield: null, head: null, body: null },
     style: 'attack',
     markets: {}, marketTimer: 0,
     structs: [{ id: 1, type: 'campfire', x: HOMESTEAD.x, y: HOMESTEAD.y, level: 1, pending: null, work: 0, workers: 0, acc: 0, on: true, recipe: 'cook_minnow' }],
     nextStructId: 2, store: {}, home: null,
     time: 0.3, weather: { kind: 'clear', left: 240 }, day: 1,
-    pois: {}, opened: {}, shrineUsed: {}, drakeBack: 0,
+    pois: {}, opened: {}, shrineUsed: {}, bossBack: {},
     threat: 8, raidTimer: 0, unpaid: false,
     discovered: { ironhold: true },
     stats: { kills: 0, earned: 0 },
@@ -72,6 +72,12 @@ function load() {
   if (!raw) return false;
   try {
     const s = JSON.parse(raw);
+    // Saves from before the world grew: move everything onto the stretched map.
+    if ((s.v || 0) < 4) {
+      s.px = s.px * SC + OX; s.py = s.py * SC + OY;
+      for (const st of s.structs || []) { st.x = PX(st.x); st.y = PY(st.y); }
+      s.v = 4;
+    }
     state = Object.assign(newState(), s);
     state.xp = Object.assign(newState().xp, s.xp || {});
     state.equip = Object.assign(newState().equip, s.equip || {});
@@ -521,7 +527,8 @@ function describeTarget(t) {
   if (t.kind === 'service') {
     if (t.svc.type === 'market') return `Trade at the ${TOWNS[t.svc.town].name} market`;
     if (t.svc.type === 'carriage') return 'Hire a carriage';
-    if (t.svc.type === 'chest') return state.opened[t.svc.poi] ? 'Search the empty chest' : 'Open the old chest';
+    if (t.svc.type === 'chest') return state.opened[t.svc.poi] ? 'Search the empty chest' : t.svc.poi.endsWith('_hoard') ? 'Open the hoard' : 'Open the old chest';
+    if (t.svc.type === 'portal') return t.svc.label;
     return 'Pray at the shrine';
   }
   if (t.kind === 'struct') {
@@ -562,6 +569,14 @@ function interact(t) {
   else if (t.kind === 'node') startGather(t.i);
   else if (t.kind === 'service') {
     if (t.svc.type === 'chest') openChest(t.svc.poi);
+    else if (t.svc.type === 'portal') {
+      state.px = t.svc.to.x; state.py = t.svc.to.y;
+      action = null;
+      for (const m of monsters) m.aggro = false;
+      Sound.sfx('open');
+      const dg = inDungeonRect(Math.round(state.px), Math.round(state.py));
+      log(dg ? `You descend into ${dg.name}. Torches flicker in the dark...` : 'You climb back into the daylight.', dg ? 'warn' : 'good');
+    }
     else if (t.svc.type === 'shrine') pray(t.svc.poi);
     else openPanel(t.svc.type, { town: t.svc.town });
   }
@@ -798,7 +813,7 @@ function killMonster(m) {
     if (Math.random() < chance) { addItem(id); loot.push(itemName(id)); }
   }
   if (def.threat) state.threat = Math.max(0, state.threat + def.threat);
-  if (def.boss) { state.drakeBack = Date.now() + 5 * 60 * 1000; toast('The Frost Drake falls!', 'level'); }
+  if (def.boss) { state.bossBack[m.type] = Date.now() + 5 * 60 * 1000; toast(`The ${def.name} falls!`, 'level'); }
   Sound.sfx('defeat');
   log(`You defeat the ${def.name.toLowerCase()}${loot.length ? '. Loot: ' + loot.join(', ') : '.'}`, 'good');
   action = null;
@@ -828,14 +843,17 @@ function die(killer) {
 
 // ---------------------------------------------------------------- exploration
 const CHEST_LOOT = [['pine_plank', 6], ['copper_bar', 4], ['iron_bar', 2], ['trout', 3], ['rough_gem', 1], ['wolf_pelt', 1], ['oak_plank', 3]];
+const HOARD_LOOT = [['steel_bar', 4], ['gold_bar', 2], ['rough_gem', 2], ['ancient_coin', 2], ['frostwood_plank', 4], ['star_fragment', 1]];
 function openChest(poi) {
   if (state.opened[poi]) { log('The chest is empty. Someone got here first... you.', 'dim'); return; }
   state.opened[poi] = true;
-  const gold = randInt(40, 160);
+  // Dungeon hoards are much richer than chests out in the open.
+  const hoard = poi.endsWith('_hoard'), table = hoard ? HOARD_LOOT : CHEST_LOOT;
+  const gold = hoard ? randInt(300, 600) : randInt(40, 160);
   state.gold += gold;
   const got = [`${gold} gold`];
-  for (let k = 0; k < 2; k++) {
-    const [id, n] = CHEST_LOOT[randInt(0, CHEST_LOOT.length - 1)];
+  for (let k = 0; k < (hoard ? 3 : 2); k++) {
+    const [id, n] = table[randInt(0, table.length - 1)];
     addItem(id, n);
     got.push(`${n} ${itemName(id)}`);
   }
@@ -856,7 +874,7 @@ function scanPois() {
   for (const p of pois) {
     if (state.pois[p.id] || Math.hypot(p.x - state.px, p.y - state.py) > 8) continue;
     state.pois[p.id] = true;
-    log(`You discovered the ${p.name}.`, 'level');
+    log(`You discovered ${/^the /i.test(p.name) ? '' : 'the '}${p.name}.`, 'level');
     toast(`Discovered: ${p.name}`, 'level');
     Sound.sfx('discover');
   }
@@ -867,11 +885,23 @@ function scanPois() {
   }
 }
 // One Frost Drake guards the summit; it returns a while after being slain.
-function ensureDrake(now) {
-  if (now < state.drakeBack || monsters.some(m => m.type === 'drake')) return;
-  const x = PEAK.x, y = PEAK.y + 2;
-  if (monsterBlocked(x, y, now)) return;
-  monsters.push({ id: nextMonsterId++, type: 'drake', x, y, hx: x, hy: y, hp: MONSTERS.drake.hp, aggro: false, nextMove: 0, nextAtk: 0 });
+// Bosses guard the summit and the dungeons' deepest rooms, returning a while after being slain.
+function ensureBosses(now) {
+  const spots = [{ type: 'drake', x: PEAK.x, y: PEAK.y + 2 }, ...DUNGEONS.map(d => ({ type: d.boss, x: d.bossRoom.x, y: d.bossRoom.y }))];
+  for (const b of spots) {
+    if (now < (state.bossBack[b.type] || 0) || monsters.some(m => m.type === b.type) || monsterBlocked(b.x, b.y, now)) continue;
+    monsters.push({ id: nextMonsterId++, type: b.type, x: b.x, y: b.y, hx: b.x, hy: b.y, hp: MONSTERS[b.type].hp, aggro: false, nextMove: 0, nextAtk: 0 });
+  }
+  // Keep the dungeons stocked with their monsters.
+  for (const d of DUNGEONS) {
+    if (monsters.filter(m => m.type === d.monster && inDungeonRect(m.x, m.y) === d).length >= 9) continue;
+    for (let tries = 0; tries < 20; tries++) {
+      const x = d.x0 + randInt(1, d.w - 2), y = d.y0 + randInt(1, d.h - 2);
+      if (!dungeonMask[idx(x, y)] || Math.hypot(x - d.start.x, y - d.start.y) < 9 || monsterBlocked(x, y, now)) continue;
+      monsters.push({ id: nextMonsterId++, type: d.monster, x, y, hx: x, hy: y, hp: MONSTERS[d.monster].hp, aggro: false, nextMove: 0, nextAtk: 0 });
+      break;
+    }
+  }
 }
 
 // Time of day: 0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset.
@@ -1130,7 +1160,7 @@ function update() {
 
   if (now - lastSpawn > 1000) {
     lastSpawn = now;
-    if (monsters.length < 230) spawnMonster(true);
+    if (monsters.length < 380) spawnMonster(true);
   }
   if (now - lastRegen > 6000) {
     lastRegen = now;
@@ -1140,7 +1170,7 @@ function update() {
   if (now - lastPoiScan > 500) {
     lastPoiScan = now;
     scanPois();
-    ensureDrake(now);
+    ensureBosses(now);
     Sound.update(soundScene());
   }
 
@@ -1698,12 +1728,14 @@ function init() {
   if (!loaded) state = newState();
   marketInit();
   indexStructs();
+  // Nothing grows through your buildings.
+  for (const st of state.structs) for (const [x, y] of footprint(st.x, st.y, structSize(st))) nodes.delete(idx(x, y));
   if (collides(state.px, state.py, Date.now())) { const p = respawnPoint(); state.px = p.x; state.py = p.y; }
   state.hp = clamp(state.hp, 1, maxHp());
   buildMapImage();
 
   const report = loaded ? runOffline() : null;
-  for (let k = 0; k < 200; k++) spawnMonster(true);
+  for (let k = 0; k < 330; k++) spawnMonster(true);
 
   document.addEventListener('keydown', onKeyDown);
   document.addEventListener('keyup', onKeyUp);

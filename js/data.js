@@ -56,6 +56,21 @@ const ITEMS = {
   ogre_tusk:      { name: 'Ogre tusk',      value: 90,  rare: true },
   star_fragment:  { name: 'Star fragment',  value: 160, rare: true },
   drake_scale:    { name: 'Drake scale',    value: 450, rare: true },
+  lurker_hide:    { name: 'Lurker hide',    value: 60,  rare: true },
+  scorpion_stinger: { name: 'Scorpion stinger', value: 80, rare: true },
+  bear_pelt:      { name: 'Snow bear pelt', value: 95,  rare: true },
+  doubloon:       { name: 'Gold doubloon',  value: 150, rare: true },
+  ancient_coin:   { name: 'Ancient coin',   value: 120, rare: true },
+  troll_hide:     { name: 'Troll hide',     value: 110, rare: true },
+  crypt_crown:    { name: 'Crypt crown',    value: 1500, rare: true },
+  wurm_scale:     { name: 'Wurm scale',     value: 900, rare: true },
+
+  // Goods from the outer regions
+  frostwood_log:  { name: 'Frostwood log',  value: 48 },
+  frostwood_plank: { name: 'Frostwood plank', value: 105 },
+  gold_ore:       { name: 'Gold ore',       value: 42 },
+  gold_bar:       { name: 'Gold bar',       value: 115 },
+  gold_ring:      { name: 'Gold ring',      value: 330, luxury: true },
 
   // Hand-made and workbench gear
   stone_axe:      { name: 'Stone axe',      value: 5,   tool: 'axe',     tier: 0, req: 1 },
@@ -64,6 +79,7 @@ const ITEMS = {
   wooden_club:    { name: 'Wooden club',    value: 10,  slot: 'weapon',  tier: 0, req: 1, stats: { acc: 4, str: 3 } },
   satchel:        { name: 'Satchel',        value: 60,  pack: 25 },
   leather_pack:   { name: 'Leather pack',   value: 180, pack: 60 },
+  explorer_pack:  { name: "Explorer's pack", value: 650, pack: 100 },
 };
 
 // Metal tiers used for smelting + smithing.
@@ -96,6 +112,9 @@ const RESOURCES = {
   copper:   { name: 'Copper rock',   skill: 'mining',      level: 1,  xp: 9,  item: 'copper_ore',   deplete: 0.3,  respawn: 8,  tool: 'pickaxe', stone: 0.25 },
   iron:     { name: 'Iron rock',     skill: 'mining',      level: 10, xp: 20, item: 'iron_ore',     deplete: 0.3,  respawn: 14, tool: 'pickaxe', stone: 0.25 },
   coal:     { name: 'Coal rock',     skill: 'mining',      level: 20, xp: 30, item: 'coal',         deplete: 0.3,  respawn: 20, tool: 'pickaxe', stone: 0.25 },
+  bogiron:  { name: 'Bog iron deposit', skill: 'mining',   level: 15, xp: 24, item: 'iron_ore',     deplete: 0.25, respawn: 12, tool: 'pickaxe', stone: 0.1 },
+  gold:     { name: 'Gold vein',     skill: 'mining',      level: 35, xp: 48, item: 'gold_ore',     deplete: 0.35, respawn: 30, tool: 'pickaxe', stone: 0.2 },
+  frostwood: { name: 'Frostwood tree', skill: 'woodcutting', level: 35, xp: 58, item: 'frostwood_log', deplete: 0.15, respawn: 35, tool: 'axe' },
   starrock: { name: 'Starstone vein', skill: 'mining',     level: 30, xp: 70, item: 'star_fragment', deplete: 0.5, respawn: 180, tool: 'pickaxe' },
   minnow:   { name: 'Minnow shoal',  skill: 'fishing',     level: 1,  xp: 6,  item: 'raw_minnow',   deplete: 0,    respawn: 0,  tool: 'rod' },
   trout:    { name: 'Trout pool',    skill: 'fishing',     level: 10, xp: 15, item: 'raw_trout',    deplete: 0,    respawn: 0,  tool: 'rod' },
@@ -113,15 +132,19 @@ addRecipe({ id: 'stone_pickaxe', skill: 'crafting', level: 1,  xp: 10, hand: tru
 addRecipe({ id: 'fishing_rod',   skill: 'crafting', level: 2,  xp: 14, inputs: { stick: 3, pine_log: 1 },        outputs: { fishing_rod: 1 } });
 addRecipe({ id: 'wooden_club',   skill: 'crafting', level: 3,  xp: 16, inputs: { pine_log: 2 },                  outputs: { wooden_club: 1 } });
 addRecipe({ id: 'satchel',       skill: 'crafting', level: 6,  xp: 40, inputs: { pine_plank: 4, stick: 6 },      outputs: { satchel: 1 } });
+addRecipe({ id: 'explorer_pack', skill: 'crafting', level: 25, xp: 160, inputs: { bear_pelt: 2, lurker_hide: 2, frostwood_plank: 2 }, outputs: { explorer_pack: 1 } });
 addRecipe({ id: 'leather_pack',  skill: 'crafting', level: 15, xp: 90, inputs: { wolf_pelt: 3, oak_plank: 2 },   outputs: { leather_pack: 1 } });
 
 addRecipe({ id: 'pine_plank',     skill: 'carpentry', level: 1,  xp: 5,  inputs: { pine_log: 1 },     outputs: { pine_plank: 1 } });
 addRecipe({ id: 'oak_plank',      skill: 'carpentry', level: 10, xp: 12, inputs: { oak_log: 1 },      outputs: { oak_plank: 1 } });
+addRecipe({ id: 'frostwood_plank', skill: 'carpentry', level: 35, xp: 45, inputs: { frostwood_log: 1 }, outputs: { frostwood_plank: 1 } });
 addRecipe({ id: 'ironwood_plank', skill: 'carpentry', level: 25, xp: 25, inputs: { ironwood_log: 1 }, outputs: { ironwood_plank: 1 } });
 
 addRecipe({ id: 'copper_bar',    skill: 'smelting', level: 1,  xp: 6,  inputs: { copper_ore: 1 },             outputs: { copper_bar: 1 } });
 addRecipe({ id: 'iron_bar',      skill: 'smelting', level: 10, xp: 14, inputs: { iron_ore: 1 },               outputs: { iron_bar: 1 } });
 addRecipe({ id: 'steel_bar',     skill: 'smelting', level: 20, xp: 25, inputs: { iron_ore: 1, coal: 2 },      outputs: { steel_bar: 1 } });
+addRecipe({ id: 'gold_bar',      skill: 'smelting', level: 35, xp: 50, inputs: { gold_ore: 1 },                outputs: { gold_bar: 1 } });
+addRecipe({ id: 'gold_ring',     skill: 'smithing', level: 38, xp: 90, inputs: { gold_bar: 1, rough_gem: 1 },  outputs: { gold_ring: 1 } });
 addRecipe({ id: 'starmetal_bar', skill: 'smelting', level: 30, xp: 60, inputs: { star_fragment: 1, coal: 2 }, outputs: { starmetal_bar: 1 } });
 
 addRecipe({ id: 'cook_minnow', skill: 'cooking', level: 1,  xp: 5,  inputs: { raw_minnow: 1 }, outputs: { minnow: 1 }, burn: true });
@@ -150,6 +173,7 @@ for (const t of TIERS) {
 function itemCategory(id) {
   const it = ITEMS[id];
   if (it.rare) return 'rare';
+  if (it.luxury) return 'luxury';
   if (it.heal) return 'food';
   if (it.slot) return 'gear';
   if (it.tool || it.pack) return 'tools';
@@ -173,6 +197,24 @@ const MONSTERS = {
   // The guardian of Mount Skyhorn's summit. Only one exists; it returns a while after being slain.
   drake:  { name: 'Frost Drake', level: 45, hp: 110, atk: 40, def: 35, maxHit: 11, speed: 2800, move: 700, aggressive: true,
             coins: [80, 200], drops: [['drake_scale', 1], ['star_fragment', 1 / 2], ['rough_gem', 1 / 2]], boss: true },
+  // Outer regions
+  lurker:   { name: 'Bog Lurker',     level: 20, hp: 32, atk: 18, def: 14, maxHit: 5, speed: 2600, move: 800, aggressive: true,
+              coins: [5, 25],  drops: [['lurker_hide', 1 / 2], ['rough_gem', 1 / 20]] },
+  scorpion: { name: 'Sand Scorpion',  level: 24, hp: 36, atk: 22, def: 22, maxHit: 6, speed: 2200, move: 500, aggressive: true,
+              coins: [0, 0],   drops: [['scorpion_stinger', 1 / 2]] },
+  bear:     { name: 'Snow Bear',      level: 32, hp: 60, atk: 28, def: 24, maxHit: 8, speed: 2800, move: 600, aggressive: true,
+              coins: [0, 0],   drops: [['bear_pelt', 1 / 2]] },
+  pirate:   { name: 'Pirate',         level: 26, hp: 40, atk: 26, def: 20, maxHit: 7, speed: 2400, move: 550, aggressive: true,
+              coins: [20, 80], drops: [['doubloon', 1 / 5], ['steel_bar', 1 / 10]] },
+  // Dungeons
+  skeleton: { name: 'Skeleton',       level: 22, hp: 30, atk: 22, def: 18, maxHit: 6, speed: 2400, move: 650, aggressive: true,
+              coins: [5, 30],  drops: [['ancient_coin', 1 / 6]] },
+  cryptlord: { name: 'Crypt Lord',    level: 40, hp: 140, atk: 36, def: 32, maxHit: 10, speed: 2800, move: 800, aggressive: true,
+              coins: [100, 250], drops: [['crypt_crown', 1], ['ancient_coin', 1]], boss: true },
+  troll:    { name: 'Cave Troll',     level: 34, hp: 70, atk: 30, def: 28, maxHit: 9, speed: 3000, move: 850, aggressive: true,
+              coins: [10, 50], drops: [['troll_hide', 1 / 2], ['coal', 1 / 3]] },
+  wurm:     { name: 'Frost Wurm',     level: 48, hp: 160, atk: 42, def: 36, maxHit: 12, speed: 3000, move: 700, aggressive: true,
+              coins: [120, 300], drops: [['wurm_scale', 1], ['star_fragment', 1]], boss: true },
 };
 
 // Everything the player can build. `con` is the Construction level needed; `work` is how
@@ -221,6 +263,15 @@ const TOWNS = {
   ratsnest:  { name: "Rat's Nest", kind: 'black',    desc: 'A bandit black market in the badlands. Pays a fortune for rare goods, no questions asked.',
                buy: { rare: 1.9, gear: 1.2, default: 0.75 }, markup: 2.2,
                sells: ['star_fragment', 'wolf_pelt', 'rough_gem', 'steel_bar'] },
+  gloomwater: { name: 'Gloomwater', kind: 'marsh',   desc: 'A town on stilts in Blackmire Marsh. Short of good metal and tools.',
+               buy: { bars: 1.35, tools: 1.45, gear: 1.25, planks: 1.2, fish: 0.7 }, markup: 1.25,
+               sells: ['iron_ore', 'coal', 'raw_trout', 'trout', 'raw_pike'] },
+  amberreach: { name: 'Amberreach', kind: 'desert',  desc: 'An oasis town in the Amber Wastes. Pays handsomely for timber, food and fish.',
+               buy: { logs: 1.6, planks: 1.7, food: 1.5, fish: 1.5, ore: 0.8, luxury: 1.3 }, markup: 1.35,
+               sells: ['gold_ore', 'gold_bar', 'copper_ore', 'copper_bar', 'rough_gem'] },
+  frosthollow: { name: 'Frosthollow', kind: 'taiga', desc: 'A hardy town in the frozen north. Needs food, metal and armour to survive the cold.',
+               buy: { food: 1.6, bars: 1.3, gear: 1.35, ore: 1.2, logs: 0.7 }, markup: 1.25,
+               sells: ['frostwood_log', 'frostwood_plank', 'coal', 'iron_ore', 'pike'] },
 };
 
 const EMPIRE = {

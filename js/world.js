@@ -2,11 +2,17 @@
 // Tiles are 1x1 world units; tile (x, y) is centred on world position (x, y).
 'use strict';
 
-const W = 400, H = 320;
-const T = { GRASS: 0, WATER: 1, WALL: 2, FLOOR: 3, ROAD: 4, ROCK: 5, BRIDGE: 6, SAND: 7, SNOW: 8, PEAK: 9 };
-const WALKABLE = new Set([T.GRASS, T.FLOOR, T.ROAD, T.BRIDGE, T.SAND, T.PEAK]);
-const BIOME = { MEADOW: 0, FOREST: 1, BADLANDS: 2, HIGHLANDS: 3 };
-const BIOME_NAMES = ['The Meadowlands', 'Thornwood Forest', 'The Badlands', 'The Frost Highlands'];
+const W = 600, H = 470;
+// The original heartland, designed on a 400x320 grid, is stretched and shifted into the middle of
+// the bigger world; the outer regions (marsh, desert, taiga, isles) surround it.
+const SC = 1.12, OX = 80, OY = 70;
+const PX = x => Math.round(x * SC + OX), PY = y => Math.round(y * SC + OY);
+const P = pts => pts.map(([x, y]) => [PX(x), PY(y)]);
+const T = { GRASS: 0, WATER: 1, WALL: 2, FLOOR: 3, ROAD: 4, ROCK: 5, BRIDGE: 6, SAND: 7, SNOW: 8, PEAK: 9, CAVE: 10 };
+const WALKABLE = new Set([T.GRASS, T.FLOOR, T.ROAD, T.BRIDGE, T.SAND, T.PEAK, T.CAVE]);
+const BIOME = { MEADOW: 0, FOREST: 1, BADLANDS: 2, HIGHLANDS: 3, MARSH: 4, DESERT: 5, TAIGA: 6, ISLES: 7, DUNGEON: 8 };
+const BIOME_NAMES = ['The Meadowlands', 'Thornwood Forest', 'The Badlands', 'The Frost Highlands', 'Blackmire Marsh',
+  'The Amber Wastes', 'The Frostpine Taiga', 'The Corsair Isles', 'The Depths'];
 
 const terrain = new Uint8Array(W * H);
 const biome = new Uint8Array(W * H);
@@ -54,11 +60,14 @@ const fbm = (n, x, y) => 0.6 * n(x, y) + 0.3 * n(x * 2.1, y * 2.1) + 0.1 * n(x *
 // Towns. `pc` is the square where the market and carriage stand; Stonedeep climbs the mountainside
 // in four terraces (heights listed from the bottom), joined by a central stairway.
 const TOWN_DEFS = {
-  ironhold:  { x: 200, y: 170, hw: 20, hh: 14, h: 0.5, margin: 4, walls: true },
-  stonedeep: { x: 210, y: 74,  hw: 11, hh: 12, h: 1.2, margin: 3, terraces: [1.2, 2.8, 4.4, 6.0] },
-  saltmere:  { x: 118, y: 270, hw: 13, hh: 7,  h: 0.35, margin: 4 },
-  thornwood: { x: 62,  y: 186, hw: 12, hh: 9,  h: 0.5, margin: 4 },
-  ratsnest:  { x: 352, y: 238, hw: 10, hh: 8,  h: 0.6, margin: 4 },
+  ironhold:  { x: PX(200), y: PY(170), hw: 20, hh: 14, h: 0.5, margin: 4, walls: true },
+  stonedeep: { x: PX(210), y: PY(74) + 2, hw: 11, hh: 12, h: 1.2, margin: 3, terraces: [1.2, 2.8, 4.4, 6.0] },
+  saltmere:  { x: PX(118), y: PY(270) - 2, hw: 13, hh: 7,  h: 0.35, margin: 4 },
+  thornwood: { x: PX(62),  y: PY(186), hw: 12, hh: 9,  h: 0.5, margin: 4 },
+  ratsnest:  { x: PX(352), y: PY(238), hw: 10, hh: 8,  h: 0.6, margin: 4 },
+  gloomwater:  { x: 48,  y: 250, hw: 12, hh: 9, h: 0.4, margin: 4 },
+  amberreach:  { x: 560, y: 262, hw: 12, hh: 9, h: 0.6, margin: 4 },
+  frosthollow: { x: 300, y: 34,  hw: 12, hh: 9, h: 0.8, margin: 5 },
 };
 for (const id in TOWN_DEFS) {
   const d = TOWN_DEFS[id];
@@ -82,15 +91,18 @@ const LANDMARKS = {
   thornwood: { kind: 'lodge', dx: -4, dy: -8,  w: 8, h: 4 },
   ratsnest:  { kind: 'den',   dx: 3,  dy: -7,  w: 6, h: 4 },
   saltmere:  { kind: 'lighthouse', w: 3, h: 3 },
+  gloomwater:  { kind: 'stilthall',  dx: -4, dy: -8, w: 8, h: 4 },
+  amberreach:  { kind: 'sunspire',   dx: 5,  dy: -8, w: 5, h: 5 },
+  frosthollow: { kind: 'hearthhall', dx: -4, dy: -8, w: 8, h: 5 },
 };
 
 // Where a new game begins: a quiet clearing by a pond, south-west of Ironhold.
-const HOMESTEAD = { x: 164, y: 194 };
+const HOMESTEAD = { x: PX(164), y: PY(194) };
 
 // Mount Skyhorn: one giant peak with a spiral trail to the summit.
-const PEAK = { x: 300, y: 122, r: 46, h: 36 };
+const PEAK = { x: PX(300), y: PY(122), r: 50, h: 38 };
 const peakProfile = d => PEAK.h * Math.pow(Math.max(0, 1 - d / PEAK.r), 1.5);
-const trailR = p => 40 - 36 * p;
+const trailR = p => (40 - 36 * p) * PEAK.r / 46;
 const trailH = p => peakProfile(trailR(p)) * 0.9 + 0.3;
 const TRAIL = [];
 for (let k = 0; k <= 200; k++) {
@@ -100,36 +112,83 @@ for (let k = 0; k <= 200; k++) {
 
 const RANGES = [
   // The great northern range, with Stonedeep in a valley at its heart.
-  { pts: [[0, 66], [60, 58], [120, 66], [170, 60], [210, 62], [260, 56], [320, 64], [400, 58]], width: 22, peak: 11 },
+  { pts: P([[0, 66], [60, 58], [120, 66], [170, 60], [210, 62], [260, 56], [320, 64], [400, 58]]), width: 25, peak: 11 },
   // Hills in the south-west.
-  { pts: [[20, 230], [36, 260], [30, 296]], width: 14, peak: 6 },
+  { pts: P([[20, 230], [36, 260], [30, 296]]), width: 16, peak: 6 },
+  // Red mesas in the Amber Wastes.
+  { pts: [[548, 150], [572, 175], [560, 200]], width: 10, peak: 5 },
 ];
 // Mountain passes without roads.
-const PASSES = [{ x: 82, y: 62, r: 9 }, { x: 330, y: 61, r: 9 }];
+const PASSES = [{ x: PX(82), y: PY(62), r: 10 }, { x: PX(330), y: PY(61), r: 10 }];
 
 const LAKES = [
-  { id: 'mirror', x: 150, y: 128, rx: 13, ry: 8, fish: [['minnow', 0.6], ['trout', 0.4]] },
-  { id: 'pond',   x: 176, y: 198, rx: 6,  ry: 4, fish: [['minnow', 1]] },
-  { id: 'fen',    x: 86,  y: 240, rx: 10, ry: 7, fish: [['trout', 0.7], ['minnow', 0.3]] },
-  { id: 'tarn',   x: 300, y: 22,  rx: 9,  ry: 6, fish: [['pike', 0.7], ['trout', 0.3]] },
-  { id: 'dust',   x: 350, y: 182, rx: 7,  ry: 5, fish: [['trout', 1]] },
+  { id: 'mirror', x: PX(150), y: PY(128), rx: 14, ry: 9, fish: [['minnow', 0.6], ['trout', 0.4]] },
+  { id: 'pond',   x: PX(176), y: PY(198), rx: 7,  ry: 4.5, fish: [['minnow', 1]] },
+  { id: 'fen',    x: PX(86),  y: PY(240), rx: 11, ry: 8, fish: [['trout', 0.7], ['minnow', 0.3]] },
+  { id: 'tarn',   x: PX(300), y: PY(22),  rx: 10, ry: 7, fish: [['pike', 0.7], ['trout', 0.3]] },
+  { id: 'dust',   x: PX(350), y: PY(182), rx: 8,  ry: 5.5, fish: [['trout', 1]] },
+  { id: 'oasis',  x: 562, y: 232, rx: 7, ry: 4.5, fish: [['trout', 0.6], ['minnow', 0.4]] },
+  { id: 'icemere', x: 210, y: 36, rx: 13, ry: 7, fish: [['pike', 0.6], ['trout', 0.4]] },
 ];
-const RIVER = [[244, 78], [248, 110], [240, 140], [246, 172], [252, 205], [244, 240], [234, 272], [230, 300]];
+const RIVER = P([[244, 78], [248, 110], [240, 140], [246, 172], [252, 205], [244, 240], [234, 272], [230, 300]]);
+// The Corsair Isles, strung across the southern sea.
+const ISLANDS = [{ x: 200, y: 440, rx: 15, ry: 8 }, { x: 272, y: 449, rx: 18, ry: 9 }, { x: 350, y: 439, rx: 13, ry: 7 }, { x: 422, y: 447, rx: 16, ry: 8 }];
 const SEA_FISH = [['pike', 0.55], ['trout', 0.45]];
 const RIVER_FISH = [['trout', 0.7], ['minnow', 0.3]];
 
 const ROADS = [
-  [[200, 170], [200, 140], [206, 110], [210, 92], [210, 74]],
-  [[210, 74], [210, 58], [212, 40], [214, 16]],
-  [[200, 170], [160, 172], [120, 180], [90, 184], [62, 186]],
-  [[200, 170], [196, 205], [170, 240], [140, 262], [118, 272]],
-  [[200, 170], [250, 172], [280, 196], [320, 220], [352, 238]],
-  [[264, 184], [286, 172], [300, 163]],
+  P([[200, 170], [200, 140], [206, 110], [210, 92], [210, 76]]),
+  [...P([[210, 76], [210, 58], [212, 40], [214, 16]]), [310, 60], [300, 34]],
+  P([[200, 170], [160, 172], [120, 180], [90, 184], [62, 186]]),
+  P([[200, 170], [196, 205], [170, 240], [140, 262], [118, 270]]),
+  P([[200, 170], [250, 172], [280, 196], [320, 220], [352, 238]]),
+  P([[264, 184], [286, 172], [300, 163]]),
+  [[PX(62), PY(186)], [112, 272], [78, 262], [48, 250]],
+  [[PX(352), PY(238)], [508, 312], [538, 284], [560, 262]],
+  [[PX(118), PY(270) - 2], [214, 404], [206, 426], [200, 440], [236, 446], [272, 449], [312, 445], [350, 439], [386, 443], [422, 447]],
 ];
 
 const coastTable = new Float32Array(W * 2 + 4);
-for (let k = 0; k < coastTable.length; k++) { const x = k / 2 - 1; coastTable[k] = 290 + 9 * Math.sin(x / 37) + (noiseC(x / 20, 3.3) - 0.5) * 12; }
+for (let k = 0; k < coastTable.length; k++) {
+  const ox = (k / 2 - 1 - OX) / SC;
+  coastTable[k] = (290 + 9 * Math.sin(ox / 37) + (noiseC(ox / 20, 3.3) - 0.5) * 12) * SC + OY;
+}
 const coastY = x => coastTable[clamp(Math.round((x + 1) * 2), 0, coastTable.length - 1)];
+
+// Two dungeons sealed away in rock, reached through their entrances in the marsh and the taiga.
+const DUNGEONS = [
+  { id: 'crypt',  name: 'The Sunken Crypt',  x0: 504, y0: 420, w: 44, h: 42, monster: 'skeleton', boss: 'cryptlord', entrance: { x: 62, y: 330 }, floor: [0.36, 0.33, 0.3] },
+  { id: 'cavern', name: 'Frostdeep Cavern',  x0: 552, y0: 420, w: 44, h: 42, monster: 'troll',    boss: 'wurm',      entrance: { x: 440, y: 46 },  floor: [0.32, 0.36, 0.42] },
+];
+const dungeonMask = new Uint8Array(W * H); // 1 = open floor, by dungeon index + 1
+const dungeonTorches = [];
+const inDungeonRect = (x, y) => DUNGEONS.find(d => x >= d.x0 && x < d.x0 + d.w && y >= d.y0 && y < d.y0 + d.h) || null;
+// Rooms on a 3x3 grid joined by corridors; you enter bottom-left and the boss waits top-right.
+function carveDungeons() {
+  DUNGEONS.forEach((d, n) => {
+    const r = mulberry32(5150 + n * 77), cw = Math.floor(d.w / 3), ch = Math.floor(d.h / 3), rooms = [];
+    const open = (x, y) => { if (x > d.x0 && y > d.y0 && x < d.x0 + d.w - 1 && y < d.y0 + d.h - 1) dungeonMask[idx(x, y)] = n + 1; };
+    for (let gy = 0; gy < 3; gy++) for (let gx = 0; gx < 3; gx++) {
+      const rw = 6 + Math.floor(r() * 4), rh = 5 + Math.floor(r() * 4);
+      const x = d.x0 + gx * cw + 2 + Math.floor(r() * (cw - rw - 3)), y = d.y0 + gy * ch + 2 + Math.floor(r() * (ch - rh - 3));
+      for (let yy = y; yy < y + rh; yy++) for (let xx = x; xx < x + rw; xx++) open(xx, yy);
+      rooms[gy * 3 + gx] = { x: x + Math.floor(rw / 2), y: y + Math.floor(rh / 2) };
+    }
+    const link = (a, b) => {
+      let x = a.x, y = a.y;
+      while (x !== b.x) { open(x, y); open(x, y + 1); x += Math.sign(b.x - x); }
+      while (y !== b.y) { open(x, y); open(x + 1, y); y += Math.sign(b.y - y); }
+    };
+    // A winding path through every room, plus a couple of shortcuts.
+    for (const [a, b] of [[6, 7], [7, 8], [8, 5], [5, 4], [4, 3], [3, 0], [0, 1], [1, 2], [6, 3], [4, 1]]) link(rooms[a], rooms[b]);
+    d.start = rooms[6];
+    d.bossRoom = rooms[2];
+    for (let y = d.y0; y < d.y0 + d.h; y++) for (let x = d.x0; x < d.x0 + d.w; x++) {
+      if (!dungeonMask[idx(x, y)] || (x + y * 3) % 7) continue;
+      if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([a, b]) => !dungeonMask[idx(x + a, y + b)])) dungeonTorches.push({ x, y, dungeon: d.id });
+    }
+  });
+}
 
 // Polyline helper with a bounding box for quick rejection.
 function polyline(pts, pad) {
@@ -176,7 +235,20 @@ function roadDist(x, y) {
 const tileRoad = new Float32Array(W * H); // distance from each tile centre to the nearest road
 
 function heightFn(x, y) {
+  const dg = inDungeonRect(Math.round(x + 0.5), Math.round(y + 0.5));
+  if (dg) {
+    // A corner is floor height if any tile touching it is open.
+    const tx = Math.round(x + 0.5), ty = Math.round(y + 0.5);
+    for (const [a, b] of [[0, 0], [-1, 0], [0, -1], [-1, -1]]) if (dungeonMask[idx(tx + a, ty + b)]) return 0.3;
+    return 3.8;
+  }
   let h = 0.25 + fbm(noiseA, x / 40, y / 40) * 0.8;
+  // Outer regions: low wet marsh in the west, dunes in the east, rolling snowy hills in the north.
+  const n = (noiseB(x / 18, y / 18) - 0.5) * 16;
+  const wm = smooth(clamp((92 + n - x) / 10, 0, 1)), wd = smooth(clamp((x - 522 - n) / 10, 0, 1)), wt = smooth(clamp((62 + n * 0.5 - y) / 10, 0, 1));
+  if (wm > 0) h = lerp(h, fbm(noiseC, x / 8, y / 8) > 0.6 ? -0.35 : 0.22 + fbm(noiseA, x / 12, y / 12) * 0.2, wm);
+  if (wd > 0) h = lerp(h, 0.3 + (Math.sin(x / 5 + noiseA(x / 15, y / 15) * 4) * 0.5 + 0.5) * 0.65, wd);
+  if (wt > 0) h += fbm(noiseA, x / 18, y / 18) * 1.1 * wt;
   for (const r of rangeLines) {
     const d = distPoly(r, x, y);
     if (d >= r.width) continue;
@@ -203,13 +275,19 @@ function heightFn(x, y) {
     e += (noiseC(x / 6, y / 6) - 0.5) * 0.3;
     if (e < 1.25) h = lerp(h, -0.9, smooth(clamp((1.25 - e) / 0.4, 0, 1)));
   }
-  const c = y > 250 ? coastY(x) : 1e9;
+  const c = y > 330 ? coastY(x) : 1e9;
   if (y > c - 6) h = lerp(h, -1.3, smooth(clamp((y - (c - 6)) / 7, 0, 1)));
+  for (const isl of ISLANDS) {
+    let e = Math.hypot((x - isl.x) / isl.rx, (y - isl.y) / isl.ry);
+    if (e > 1.5) continue;
+    e += (noiseC(x / 5, y / 5) - 0.5) * 0.3;
+    if (e < 1.2) h = lerp(h, 0.45 + fbm(noiseA, x / 9, y / 9) * 0.5, smooth(clamp((1.2 - e) / 0.35, 0, 1)));
+  }
   const dr = distPoly(riverLine, x, y);
   if (dr < 3.2) h = lerp(h, -0.7, smooth(clamp((3.2 - dr) / 1.6, 0, 1)));
   if (h > -0.05) {
     const d = roadDist(x, y);
-    const capH = Math.hypot(x - TOWN_DEFS.stonedeep.x, y - TOWN_DEFS.stonedeep.y) < 32 ? 7.5 : 2.0;
+    const capH = Math.hypot(x - TOWN_DEFS.stonedeep.x, y - TOWN_DEFS.stonedeep.y) < 36 ? 7.5 : 2.0;
     if (d < 3.4) h = lerp(h, clamp(h, 0.2, capH), d < 2 ? 1 : smooth((3.4 - d) / 1.4));
   }
   for (const id in TOWN_DEFS) {
@@ -223,9 +301,15 @@ function heightFn(x, y) {
 
 function biomeFn(x, y) {
   const n = (noiseB(x / 18, y / 18) - 0.5) * 16;
-  if (y < 40 + n * 0.5) return BIOME.HIGHLANDS;
-  if (x > 296 + n && y > 92 && y < 284) return BIOME.BADLANDS;
-  if (x < 128 + n && y > 92 + n && y < 272) return BIOME.FOREST;
+  if (inDungeonRect(x, y)) return BIOME.DUNGEON;
+  if (y > coastY(x) + 10) return BIOME.ISLES;
+  if (y < 62 + n * 0.5) return BIOME.TAIGA;
+  if (x < 92 + n) return BIOME.MARSH;
+  if (x > 522 + n) return BIOME.DESERT;
+  const ox = (x - OX) / SC, oy = (y - OY) / SC;
+  if (oy < 40 + n * 0.5) return BIOME.HIGHLANDS;
+  if (ox > 296 + n && oy > 92 && oy < 284) return BIOME.BADLANDS;
+  if (ox < 128 + n && oy > 92 + n && oy < 272) return BIOME.FOREST;
   return BIOME.MEADOW;
 }
 
@@ -252,6 +336,7 @@ function pickWeighted(r, list) {
 
 function generateWorld() {
   const r = mulberry32(2024);
+  carveDungeons();
   for (let cy = 0; cy <= H; cy++) for (let cx = 0; cx <= W; cx++) cornerH[cy * (W + 1) + cx] = heightFn(cx - 0.5, cy - 0.5);
 
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
@@ -265,7 +350,8 @@ function generateWorld() {
     biome[i] = biomeFn(x, y);
     const town = townAt(x, y);
     let t;
-    if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) t = h < -0.05 ? T.WATER : T.ROCK;
+    if (inDungeonRect(x, y)) t = dungeonMask[i] ? T.CAVE : T.ROCK;
+    else if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) t = h < -0.05 ? T.WATER : T.ROCK;
     else if (town) {
       const d = TOWN_DEFS[town];
       const edge = Math.abs(x - d.x) === d.hw || Math.abs(y - d.y) === d.hh;
@@ -298,7 +384,11 @@ function generateWorld() {
     const h = tileH[i], b = biome[i];
     const dCap = Math.hypot(x - capital.x, y - capital.y);
     let table;
-    if (h > 1.4) {
+    if (b === BIOME.MARSH) table = [[0.2, 'tree'], [0.05, 'bush'], [0.035, 'rock'], [0.02, 'pebbles']];
+    else if (b === BIOME.DESERT) table = [[0.03, 'rock'], [0.04, 'pebbles']];
+    else if (b === BIOME.TAIGA) table = [[0.32, 'tree'], [0.05, 'rock'], [0.02, 'pebbles']];
+    else if (b === BIOME.ISLES) table = [[0.1, 'tree'], [0.04, 'bush'], [0.03, 'pebbles'], [0.012, 'rock']];
+    else if (h > 1.4) {
       table = [[0.09, 'rock'], [0.04, 'tree'], [0.03, 'pebbles']];
     } else if (b === BIOME.FOREST) {
       table = [[0.5, 'tree'], [0.05, 'bush'], [0.015, 'pebbles'], [0.01, 'rock']];
@@ -314,7 +404,13 @@ function generateWorld() {
     for (const [p, k] of table) { acc += p; if (roll < acc) { kind = k; break; } }
     if (!kind) continue;
     let res = kind;
-    if (kind === 'tree') {
+    if (kind === 'tree' && b === BIOME.TAIGA) res = pick < 0.35 ? 'frostwood' : 'pine';
+    else if (kind === 'tree' && (b === BIOME.MARSH || b === BIOME.ISLES)) res = pick < 0.4 ? 'pine' : 'oak';
+    else if (kind === 'rock' && b === BIOME.MARSH) res = pick < 0.8 ? 'bogiron' : 'coal';
+    else if (kind === 'rock' && b === BIOME.DESERT) res = pick < 0.35 ? 'gold' : pick < 0.8 ? 'copper' : 'iron';
+    else if (kind === 'rock' && b === BIOME.TAIGA) res = pick < 0.5 ? 'iron' : 'coal';
+    else if (kind === 'rock' && b === BIOME.ISLES) res = 'copper';
+    else if (kind === 'tree') {
       res = b === BIOME.HIGHLANDS ? (pick < 0.3 ? 'pine' : pick < 0.55 ? 'oak' : 'ironwood')
         : b === BIOME.FOREST ? (x < 70 && pick < 0.12 ? 'ironwood' : pick < 0.55 ? 'pine' : 'oak')
         : pick < 0.85 ? 'pine' : 'oak';
@@ -355,6 +451,8 @@ function computeColors() {
   const tint = {
     [BIOME.MEADOW]: [0.38, 0.56, 0.26], [BIOME.FOREST]: [0.25, 0.42, 0.2],
     [BIOME.BADLANDS]: [0.6, 0.47, 0.3], [BIOME.HIGHLANDS]: [0.4, 0.5, 0.39],
+    [BIOME.MARSH]: [0.3, 0.36, 0.2], [BIOME.DESERT]: [0.86, 0.73, 0.47], [BIOME.TAIGA]: [0.86, 0.89, 0.92], [BIOME.ISLES]: [0.45, 0.66, 0.32],
+    [BIOME.DUNGEON]: [0.3, 0.3, 0.3],
   };
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = idx(x, y), h = tileH[i];
@@ -367,10 +465,11 @@ function computeColors() {
       }
       case T.SAND: c = [0.84, 0.78, 0.55]; break;
       case T.WATER: case T.BRIDGE: c = [0.16, 0.33, 0.46]; break;
-      case T.ROCK: c = h > 4.8 ? [0.62, 0.6, 0.58] : [0.5, 0.47, 0.43]; if (h > 16) c = [0.9, 0.92, 0.95]; break;
+      case T.ROCK: c = h > 4.8 ? [0.62, 0.6, 0.58] : [0.5, 0.47, 0.43]; if (h > 16) c = [0.9, 0.92, 0.95]; if (inDungeonRect(x, y)) c = [0.2, 0.19, 0.2]; break;
       case T.SNOW: c = [0.93, 0.95, 0.98]; break;
       case T.ROAD: c = h > 7 ? [0.82, 0.82, 0.84] : [0.62, 0.5, 0.34]; break;
       case T.PEAK: c = [0.88, 0.9, 0.94]; break;
+      case T.CAVE: c = (inDungeonRect(x, y) || DUNGEONS[0]).floor.slice(); break;
       case T.WALL: c = [0.45, 0.43, 0.4]; break;
       default: c = townAt(x, y) === 'ironhold' ? [0.6, 0.57, 0.51] : [0.56, 0.47, 0.34];
     }
@@ -399,6 +498,12 @@ function spawnTable(x, y) {
   if (t.dist < (t.id === 'ironhold' ? 34 : 24)) return null;
   if (Math.hypot(x - HOMESTEAD.x, y - HOMESTEAD.y) < 24) return null;
   const i = idx(x, y), b = biome[i];
+  const dg = inDungeonRect(x, y);
+  if (dg) return Math.hypot(x - dg.start.x, y - dg.start.y) < 8 ? null : [[dg.monster, 1]];
+  if (b === BIOME.MARSH) return [['lurker', 0.7], ['wolf', 0.3]];
+  if (b === BIOME.DESERT) return [['scorpion', 0.8], ['bandit', 0.2]];
+  if (b === BIOME.TAIGA) return [['bear', 0.5], ['wolf', 0.5]];
+  if (b === BIOME.ISLES) return [['pirate', 1]];
   if (Math.hypot(x - PEAK.x, y - PEAK.y) < PEAK.r) {
     if (Math.hypot(x - PEAK.x, y - PEAK.y) < 8) return null;
     return tileH[i] > 14 ? [['ogre', 0.7], ['wolf', 0.3]] : [['wolf', 0.6], ['bandit', 0.4]];
@@ -415,9 +520,12 @@ function regionName(x, y) {
   const town = townAt(Math.round(x), Math.round(y), 1);
   if (town) return TOWNS[town].name;
   const i = idx(clamp(Math.round(x), 0, W - 1), clamp(Math.round(y), 0, H - 1));
+  const dg = inDungeonRect(Math.round(x), Math.round(y));
+  if (dg) return dg.name;
   if (Math.hypot(x - PEAK.x, y - PEAK.y) < 6) return 'Summit of Mount Skyhorn';
   if (Math.hypot(x - PEAK.x, y - PEAK.y) < PEAK.r) return 'Mount Skyhorn';
   if (Math.hypot(x - HOMESTEAD.x, y - HOMESTEAD.y) < 14) return 'Pondside Clearing';
+  if (biome[i] >= BIOME.MARSH) return BIOME_NAMES[biome[i]];
   if (tileH[i] > 1.4 && biome[i] !== BIOME.HIGHLANDS) return 'The Mountains';
   if (y > coastY(x) - 12) return 'The Southern Coast';
   return BIOME_NAMES[biome[i]];
@@ -425,18 +533,30 @@ function regionName(x, y) {
 
 // ------------------------------------------------------------ hand-placed details
 const POI_DEFS = [
-  { id: 'watchtower',  kind: 'ruins',  name: 'Old Watchtower',     x: 128, y: 148 },
-  { id: 'fallenkeep',  kind: 'ruins',  name: 'Fallen Keep',        x: 262, y: 252 },
-  { id: 'mossruins',   kind: 'ruins',  name: 'Mossy Ruins',        x: 64,  y: 118 },
-  { id: 'frostruins',  kind: 'ruins',  name: 'Frozen Ruins',       x: 150, y: 26 },
-  { id: 'whispering',  kind: 'stones', name: 'Whispering Stones',  x: 226, y: 218 },
-  { id: 'redstones',   kind: 'stones', name: 'Red Stones',         x: 322, y: 266 },
-  { id: 'abandoned',   kind: 'camp',   name: 'Abandoned Camp',     x: 150, y: 224 },
-  { id: 'hunters',     kind: 'camp',   name: "Hunters' Camp",      x: 360, y: 30 },
-  { id: 'trapper',     kind: 'camp',   name: "Trapper's Camp",     x: 36,  y: 206 },
-  { id: 'wayside',     kind: 'shrine', name: 'Wayside Shrine',     x: 176, y: 150 },
-  { id: 'mountshrine', kind: 'shrine', name: 'Mountain Shrine',    x: 276, y: 172 },
-  { id: 'passshrine',  kind: 'shrine', name: 'Pass Shrine',        x: 82,  y: 74 },
+  { id: 'watchtower',  kind: 'ruins',  name: 'Old Watchtower',     x: PX(128), y: PY(148) },
+  { id: 'fallenkeep',  kind: 'ruins',  name: 'Fallen Keep',        x: PX(262), y: PY(252) },
+  { id: 'mossruins',   kind: 'ruins',  name: 'Mossy Ruins',        x: PX(64),  y: PY(118) },
+  { id: 'frostruins',  kind: 'ruins',  name: 'Frozen Ruins',       x: PX(150), y: PY(26) },
+  { id: 'whispering',  kind: 'stones', name: 'Whispering Stones',  x: PX(226), y: PY(218) },
+  { id: 'redstones',   kind: 'stones', name: 'Red Stones',         x: PX(322), y: PY(266) },
+  { id: 'abandoned',   kind: 'camp',   name: 'Abandoned Camp',     x: PX(150), y: PY(224) },
+  { id: 'hunters',     kind: 'camp',   name: "Hunters' Camp",      x: PX(360), y: PY(30) },
+  { id: 'trapper',     kind: 'camp',   name: "Trapper's Camp",     x: PX(36),  y: PY(206) },
+  { id: 'wayside',     kind: 'shrine', name: 'Wayside Shrine',     x: PX(176), y: PY(150) },
+  { id: 'mountshrine', kind: 'shrine', name: 'Mountain Shrine',    x: PX(276), y: PY(172) },
+  { id: 'passshrine',  kind: 'shrine', name: 'Pass Shrine',        x: PX(82),  y: PY(74) },
+  // The outer regions
+  { id: 'drowned',     kind: 'ruins',  name: 'Drowned Chapel',     x: 40,  y: 186 },
+  { id: 'bogstones',   kind: 'stones', name: 'Bog Stones',         x: 70,  y: 372 },
+  { id: 'crypt',       kind: 'dungeon', name: 'The Sunken Crypt',  x: 62,  y: 330, dungeon: 'crypt' },
+  { id: 'buriedtemple', kind: 'ruins', name: 'Buried Temple',      x: 548, y: 120 },
+  { id: 'caravan',     kind: 'camp',   name: 'Caravan Wreck',      x: 578, y: 340 },
+  { id: 'suncircle',   kind: 'stones', name: 'Sun Circle',         x: 540, y: 222 },
+  { id: 'lodge',       kind: 'camp',   name: "Old Trapper's Lodge", x: 96, y: 36 },
+  { id: 'frostshrine', kind: 'shrine', name: 'Frost Shrine',       x: 480, y: 28 },
+  { id: 'cavern',      kind: 'dungeon', name: 'Frostdeep Cavern',  x: 440, y: 46, dungeon: 'cavern' },
+  { id: 'corsaircove', kind: 'camp',   name: 'Corsair Cove',       x: 424, y: 448 },
+  { id: 'seashrine',   kind: 'shrine', name: 'Sea Shrine',         x: 270, y: 452 },
 ];
 
 function decorateWorld(r) {
@@ -507,6 +627,14 @@ function decorateWorld(r) {
       part('firepit', x, y + 1, false);
       part('crates', x + 2, y + 1);
       services.set(idx(x - 1, y + 2), { type: 'chest', poi: def.id });
+    } else if (def.kind === 'dungeon') {
+      // The entrance leads down into the dungeon; a way back waits in its first room.
+      const dg = DUNGEONS.find(d => d.id === def.dungeon);
+      part('mound', x - 1, y - 1); part('mound', x + 1, y - 1);
+      services.set(idx(x, y), { type: 'portal', poi: def.id, to: { x: dg.start.x + 1, y: dg.start.y }, label: `Enter ${def.name}` });
+      services.set(idx(dg.start.x - 1, dg.start.y), { type: 'portal', poi: def.id, to: { x: x + 0.5, y: y + 2 }, label: 'Climb back to the surface' });
+      services.set(idx(dg.bossRoom.x + 2, dg.bossRoom.y - 1), { type: 'chest', poi: `${def.id}_hoard` });
+      poi.dungeon = dg.id;
     } else {
       services.set(idx(x, y), { type: 'shrine', poi: def.id });
     }
@@ -545,6 +673,9 @@ function decorateWorld(r) {
     saltmere: ['fishrack', 'fishrack', 'fishrack', 'nets', 'nets', 'tables', 'tables', 'board', 'barrel', 'crates', 'well', 'banner'],
     thornwood: ['logpile', 'logpile', 'sawhorse', 'sawhorse', 'tables', 'tables', 'board', 'well', 'hay', 'barrel', 'banner', 'forge'],
     ratsnest: ['gamble', 'gamble', 'gamble', 'tent', 'tent', 'firepit', 'firepit', 'tables', 'barrel', 'barrel', 'crates', 'banner'],
+    gloomwater: ['fishrack', 'fishrack', 'nets', 'tables', 'board', 'barrel', 'crates', 'banner', 'firepit', 'barrel'],
+    amberreach: ['palm', 'palm', 'palm', 'palm', 'palm', 'well', 'tables', 'tables', 'board', 'crates', 'barrel', 'banner'],
+    frosthollow: ['logpile', 'logpile', 'forge', 'tables', 'board', 'barrel', 'hay', 'banner', 'firepit', 'firepit'],
   };
   // What each town's market stalls sell.
   const STALL_GOODS = {
@@ -553,6 +684,9 @@ function decorateWorld(r) {
     saltmere: ['fish', 'fish', 'produce', 'cloth', 'bread', 'fish'],
     thornwood: ['meat', 'furs', 'produce', 'tools', 'bread', 'furs'],
     ratsnest: ['shady', 'weapons', 'shady', 'meat', 'weapons'],
+    gloomwater: ['fish', 'produce', 'pottery', 'shady', 'fish'],
+    amberreach: ['cloth', 'pottery', 'produce', 'ore', 'flowers', 'cloth'],
+    frosthollow: ['furs', 'meat', 'bread', 'tools', 'furs'],
   };
   for (const id in TOWN_DEFS) {
     const d = TOWN_DEFS[id], tr = mulberry32(id.length * 31 + d.y);
@@ -616,7 +750,8 @@ function decorateWorld(r) {
       }
     }
     // An animal pen just outside town.
-    const pens = { ironhold: [d.x - d.hw - 9, d.y + 3], stonedeep: [d.x + d.hw + 2, d.y + 2], saltmere: [d.x - d.hw - 7, d.y - 3], thornwood: [d.x + d.hw + 2, d.y - 5], ratsnest: [d.x - d.hw - 7, d.y + 1] };
+    const pens = { ironhold: [d.x - d.hw - 9, d.y + 3], stonedeep: [d.x + d.hw + 2, d.y + 2], saltmere: [d.x - d.hw - 7, d.y - 3], thornwood: [d.x + d.hw + 2, d.y - 5], ratsnest: [d.x - d.hw - 7, d.y + 1],
+      gloomwater: [d.x + d.hw + 2, d.y - 4], amberreach: [d.x - d.hw - 7, d.y + 2], frosthollow: [d.x - d.hw - 7, d.y] };
     const [px, py] = pens[id];
     let fits = true;
     for (let y = py; y < py + 4 && fits; y++) for (let x = px; x < px + 5; x++) {
@@ -628,7 +763,7 @@ function decorateWorld(r) {
         nodes.delete(idx(x, y));
         if (y === py || y === py + 3 || x === px || x === px + 4) block(x, y);
       }
-      townProps.push({ kind: 'pen', x: px, y: py, w: 5, h: 4, town: id, animal: { ironhold: 'cow', stonedeep: 'pig', saltmere: 'chicken', thornwood: 'pig', ratsnest: 'chicken' }[id] });
+      townProps.push({ kind: 'pen', x: px, y: py, w: 5, h: 4, town: id, animal: { ironhold: 'cow', stonedeep: 'pig', saltmere: 'chicken', thornwood: 'pig', ratsnest: 'chicken', gloomwater: 'pig', amberreach: 'chicken', frosthollow: 'cow' }[id] });
     }
   }
 

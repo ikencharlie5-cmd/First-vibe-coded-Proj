@@ -44,22 +44,35 @@ GitHub Pages or by opening `index.html` in a browser. It's made for keyboard and
    the resources around them, so where you build matters. Stations with workers refine
    automatically. Everything flows through your storehouse, and work continues while
    you're away (up to 12 hours).
-5. **Trade.** Five towns, each with its own prices and goods:
+5. **Trade.** Eight towns, each with its own prices and goods:
    - **Ironhold**, the capital, has fair prices for everything.
    - **Stonedeep**, a mining town in the northern mountains, is hungry for food and timber.
    - **Saltmere**, a fishing village on the south coast, pays well for planks and metal.
    - **Thornwood**, a lodge in the western forest, is rich in timber and short of metal.
    - **Rat's Nest**, a bandit black market in the eastern badlands, pays a fortune for rare loot.
+   - **Gloomwater**, a stilt village deep in Blackmire Marsh, is short of metal and tools.
+   - **Amberreach**, an adobe oasis town in the Amber Wastes, pays well for timber, food and fish, and sells gold.
+   - **Frosthollow**, a snowbound timber town in the far north, needs food, metal and armour to survive the cold.
    Prices drift, and towns post big orders and gluts. Once you've visited a town, its
    carriage can take you back.
 6. **Fight and defend.** Goblins and wolves roam the meadows and forest, bandits hold the
-   badlands, and ogres haunt the frozen highlands past Stonedeep. Monster drops (wolf
+   badlands, and ogres haunt the frozen highlands past Stonedeep. Further out, bog lurkers
+   stalk the marsh, sand scorpions the desert, snow bears the taiga and pirates the
+   Corsair Isles. Monster drops (wolf
    pelts, star fragments and more) can't be gathered any other way. Bandits raid camps and
    storehouses, so smith swords and build guard towers.
 
-**Explore.** Ruins and abandoned camps hide treasure chests, shrines heal you, and signposts
-point the way between towns. Mount Skyhorn's spiral trail leads to a summit with starstone
-veins, guarded by a Frost Drake.
+**Explore.** The world has eight regions: the Meadowlands, Thornwood Forest, the Badlands,
+the Frost Highlands, Blackmire Marsh, the Amber Wastes, the Frostpine Taiga and the Corsair
+Isles, which are linked by a chain of bridges. Ruins and abandoned camps hide treasure chests, shrines heal
+you, and signposts point the way between towns. New ground brings new resources: bog iron in
+the marsh, gold in the desert and frostwood in the taiga, which you can turn into gold rings
+and an explorer's pack. Mount Skyhorn's spiral trail leads to a summit with starstone veins,
+guarded by a Frost Drake.
+
+**Dungeons.** Two dungeons wait underground: the Sunken Crypt, under the marsh, full of
+skeletons and ruled by the Crypt Lord, and Frostdeep Cavern, under the taiga, home to cave
+trolls and the Frost Wurm. They are dark, torchlit halls, and each boss guards a hoard.
 
 **A living world.** Grass, wildflowers, reeds and mushrooms cover the land. Deer, rabbits
 and birds roam, and fish jump in the lakes. A 20-minute day/night cycle brings starry nights
@@ -99,7 +112,7 @@ then visit http://localhost:8000.
 - `index.html`: page structure and HUD
 - `style.css`: HUD and panel styling
 - `js/data.js`: all tunable game data (items, recipes, monsters, buildings, towns, balance numbers)
-- `js/world.js`: the hand-designed map: mountains, Mount Skyhorn, rivers, lakes, coast, roads, towns, town props, ruins and resource placement
+- `js/world.js`: the hand-designed map: biomes, mountains, Mount Skyhorn, rivers, lakes, coast, islands, roads, towns, town props, ruins, dungeons and resource placement
 - `js/audio.js`: generated music, sound effects and ambience (Web Audio API, no audio files)
 - `js/icons.js`: item icons drawn on canvas, and the interface's SVG icons
 - `js/game.js`: game logic: movement, gathering, crafting, building, combat, markets, workers, raids, saving and UI panels

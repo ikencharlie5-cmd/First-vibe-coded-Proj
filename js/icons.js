@@ -4,8 +4,8 @@
 const Icons = (() => {
   const cache = {};
   const S = 64;
-  const METAL = { copper: '#c77a3a', iron: '#a5a5a8', steel: '#dfe6ee', starmetal: '#9a86ff', stone: '#8d8a85' };
-  const WOOD = { pine: ['#a07448', '#d9b17a'], oak: ['#6e4a2a', '#b88a56'], ironwood: ['#3d3434', '#5fb39c'] };
+  const METAL = { copper: '#c77a3a', iron: '#a5a5a8', steel: '#dfe6ee', starmetal: '#9a86ff', stone: '#8d8a85', gold: '#e8c547' };
+  const WOOD = { pine: ['#a07448', '#d9b17a'], oak: ['#6e4a2a', '#b88a56'], ironwood: ['#3d3434', '#5fb39c'], frostwood: ['#8a8e96', '#e0eef4'] };
 
   function shade(hex, k) {
     const n = parseInt(hex.slice(1), 16);
@@ -123,7 +123,7 @@ const Icons = (() => {
       g.beginPath(); g.arc(32, 18, 9, Math.PI, 0); g.strokeStyle = '#3a2210'; g.lineWidth = 4; g.stroke();
       ellipse(g, 32, 34, 3, 3, '#d9b14a');
     },
-    pelt(g) { poly(g, [[12, 20], [22, 12], [30, 18], [40, 10], [52, 18], [50, 34], [56, 46], [40, 50], [32, 56], [22, 48], [10, 44], [16, 32]], '#8f8f96'); },
+    pelt(g, color = '#8f8f96') { poly(g, [[12, 20], [22, 12], [30, 18], [40, 10], [52, 18], [50, 34], [56, 46], [40, 50], [32, 56], [22, 48], [10, 44], [16, 32]], color); },
     gem(g, color) {
       poly(g, [[32, 10], [50, 26], [32, 54], [14, 26]], color);
       poly(g, [[32, 10], [40, 26], [32, 54], [24, 26]], shade(color, 0.35));
@@ -145,10 +145,25 @@ const Icons = (() => {
       for (let k = 0; k < 10; k++) { const a = k / 10 * Math.PI * 2 - Math.PI / 2, r = k % 2 ? 9 : 22; pts.push([32 + Math.cos(a) * r, 32 + Math.sin(a) * r]); }
       poly(g, pts, color);
     },
-    scale(g) {
+    scale(g, color = '#a8d8f0') {
       g.beginPath(); g.moveTo(32, 8); g.quadraticCurveTo(58, 20, 32, 56); g.quadraticCurveTo(6, 20, 32, 8);
-      g.fillStyle = '#a8d8f0'; g.fill(); outline(g);
+      g.fillStyle = color; g.fill(); outline(g);
       g.beginPath(); g.moveTo(32, 14); g.lineTo(32, 48); g.strokeStyle = '#e8f8ff'; g.lineWidth = 2; g.stroke();
+    },
+    coin(g, face, mark) {
+      for (const [x, y] of [[24, 40], [40, 36], [30, 26]]) {
+        ellipse(g, x, y, 13, 13, face);
+        g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.strokeStyle = mark; g.lineWidth = 2; g.stroke();
+      }
+    },
+    crown(g) {
+      poly(g, [[10, 48], [10, 20], [20, 32], [32, 14], [44, 32], [54, 20], [54, 48]], '#e8c547');
+      for (const [x, c] of [[20, '#c0392b'], [32, '#5a8ad8'], [44, '#5ad86a']]) ellipse(g, x, 40, 4, 4, c);
+    },
+    stinger(g) {
+      g.beginPath(); g.moveTo(14, 54); g.quadraticCurveTo(10, 20, 44, 12); g.lineTo(52, 8); g.lineTo(46, 20); g.quadraticCurveTo(22, 26, 24, 56); g.closePath();
+      g.fillStyle = '#9a6a2a'; g.fill(); outline(g);
+      poly(g, [[44, 12], [56, 4], [48, 20]], '#2a1a0a');
     },
   };
 
@@ -163,6 +178,7 @@ const Icons = (() => {
     else if (id === 'copper_ore') draw.ore(g, '#7a6a5a', '#ff8c3a');
     else if (id === 'iron_ore') draw.ore(g, '#6e6862', '#e8d6c2');
     else if (id === 'coal') draw.ore(g, '#2e2c2a', '#55524e');
+    else if (id === 'gold_ore') draw.ore(g, '#8a7f68', '#ffd23a');
     else if (id.endsWith('_bar')) draw.bar(g, tier);
     else if (id === 'raw_minnow') draw.fish(g, '#9ab8c8', '#dfe8ec');
     else if (id === 'raw_trout') draw.fish(g, '#8aa070', '#e8b0a0');
@@ -181,6 +197,16 @@ const Icons = (() => {
     else if (id === 'wooden_club') draw.club(g);
     else if (id === 'satchel') draw.bag(g, '#b08a5a');
     else if (id === 'leather_pack') draw.bag(g, '#7a4a2a');
+    else if (id === 'explorer_pack') draw.bag(g, '#e8eef2');
+    else if (id === 'lurker_hide') draw.pelt(g, '#5a6a42');
+    else if (id === 'bear_pelt') draw.pelt(g, '#eef2f4');
+    else if (id === 'troll_hide') draw.pelt(g, '#7a8a7a');
+    else if (id === 'scorpion_stinger') draw.stinger(g);
+    else if (id === 'doubloon') draw.coin(g, '#e8c547', '#9a7a1a');
+    else if (id === 'ancient_coin') draw.coin(g, '#8aa08a', '#4a5a4a');
+    else if (id === 'crypt_crown') draw.crown(g);
+    else if (id === 'wurm_scale') draw.scale(g, '#d8f0ff');
+    else if (id === 'gold_ring') draw.ring(g, '#e8c547', '#5a8ad8');
     else if (id === 'wolf_pelt') draw.pelt(g);
     else if (id === 'rough_gem') draw.gem(g, '#b45ad8');
     else if (id === 'goblin_trinket') draw.ring(g, '#a5a5a8', '#5ad86a');

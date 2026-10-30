@@ -30,7 +30,7 @@ const Render3D = (() => {
   };
   let Q = QUALITY[settings.quality] || QUALITY.medium;
   let hemi, lantern, stars, rain, clouds = [];
-  let rainAmt = 0, fogAmt = 0, cloudAmt = 0, stepPhase = 0;
+  let rainAmt = 0, fogAmt = 0, cloudAmt = 0, stepPhase = 0, underAmt = 0;
   const glows = [];          // additive glow sprites: { sp, base, night } (night-only ones fade with daylight)
   const townGroups = [];     // { g, x, y } so faraway towns can be hidden
   const walkers = [];        // townsfolk, guards, dogs and penned animals
@@ -38,7 +38,7 @@ const Render3D = (() => {
   const flocks = [];         // birds overhead
   const carriers = new Map(); // settlement workers walking to the storehouse
   const poiObjs = [];
-  let windowMat;
+  let windowMat, waterMesh;
   const STREAM_R = 64;
   const TIER_COLORS = [0x8a8a8a, 0xc77a3a, 0x9c9c9c, 0xd2dae4, 0x8f7bff];
 
@@ -161,6 +161,7 @@ const Render3D = (() => {
     const water = new C.Mesh(wg, new C.MeshPhongMaterial({ color: 0x4f9fd9, map: waterTex, transparent: true, opacity: 0.82, shininess: 80, specular: 0x88bbee }));
     water.position.set(W / 2 - 0.5, -0.04, H / 2 - 0.5);
     water.receiveShadow = true;
+    waterMesh = water;
     scene.add(water);
 
     // Town walls, bridges and gate torches.
@@ -217,7 +218,7 @@ const Render3D = (() => {
   }
 
   // ------------------------------------------------------------ resource nodes (streamed around the player)
-  const ORE = { copper: [0x8a6f5a, 0xff8c3a], iron: [0x7d7570, 0xeadbcc], coal: [0x55524e, 0x141416] };
+  const ORE = { copper: [0x8a6f5a, 0xff8c3a], iron: [0x7d7570, 0xeadbcc], coal: [0x55524e, 0x141416], bogiron: [0x5a5242, 0xb8622a], gold: [0x8a7f68, 0xffd23a] };
   function nodeParts(res) {
     switch (res) {
       case 'pine': return [
@@ -230,10 +231,15 @@ const Render3D = (() => {
       case 'ironwood': return [
         { g: geo('CylinderGeometry', 0.13, 0.2, 1.2, 6), c: 0x3b3030, y: 0.6 },
         { g: geo('ConeGeometry', 0.6, 2.3, 5), c: 0x25a888, y: 2.0, vary: 1 }];
-      case 'copper': case 'iron': case 'coal': return [
+      case 'copper': case 'iron': case 'coal': case 'bogiron': case 'gold': return [
         { g: geo('DodecahedronGeometry', 0.45, 0), c: ORE[res][0], y: 0.22, sy: 0.75, vary: 1 },
         { g: geo('OctahedronGeometry', 0.12, 0), c: ORE[res][1], y: 0.42, x: 0.16, z: 0.12 },
         { g: geo('OctahedronGeometry', 0.1, 0), c: ORE[res][1], y: 0.34, x: -0.2, z: -0.05 }];
+      case 'frostwood': return [
+        { g: geo('CylinderGeometry', 0.1, 0.15, 0.8, 5), c: 0x8a8e96, y: 0.4 },
+        { g: geo('ConeGeometry', 0.68, 1.2, 7), c: 0xa8c8d8, y: 1.15, vary: 1 },
+        { g: geo('ConeGeometry', 0.5, 1.0, 7), c: 0xd8eaf2, y: 1.75, vary: 1 },
+        { g: geo('ConeGeometry', 0.3, 0.7, 7), c: 0xf4fbff, y: 2.3, vary: 1 }];
       case 'bush': return [
         { g: geo('IcosahedronGeometry', 0.34, 0), c: 0x3d7a35, y: 0.28, sy: 0.8, vary: 1 },
         { g: geo('IcosahedronGeometry', 0.05, 0), c: 0xc2342a, y: 0.42, x: 0.15, z: 0.18 },
@@ -507,9 +513,112 @@ const Render3D = (() => {
     bar.fg.material.color.setHex(ratio > 0.5 ? 0x4fc23a : ratio > 0.25 ? 0xe0b23a : 0xd8402f);
   }
 
+  // Generic four-legged beast built from a few boxes.
+  function beast(o) {
+    const g = new C.Group(), inner = new C.Group();
+    g.add(inner);
+    const [bw, bh, bd] = o.body, y = o.legH + bh / 2 - 0.05;
+    inner.add(box(bw, bh, bd, o.color, 0, y, 0), box(bw * 0.7, bh * 0.75, bd * 0.35, o.color, 0, y + bh * 0.15, bd * 0.6));
+    for (const sx of [-1, 1]) inner.add(box(0.06, 0.06, 0.02, o.eye || 0x1a1a1a, sx * bw * 0.2, y + bh * 0.25, bd * 0.78));
+    const legs = [];
+    for (const [x, z] of [[-1, 1], [1, 1], [-1, -1], [1, -1]]) {
+      const l = limb(o.legW, o.legH + 0.05, o.leg || o.color);
+      l.position.set(x * (bw / 2 - o.legW / 2), o.legH, z * (bd / 2 - o.legW));
+      inner.add(l); legs.push(l);
+    }
+    return { g, inner, kind: 'wolf', legs, height: o.legH + bh + 0.2 };
+  }
+
+  function skeletonBody(scale, robe) {
+    const a = humanoid({ tunic: robe || 0xd8d2bc, skin: 0xe8e2cc, legs: 0xd8d2bc, sleeve: 0xe8e2cc, scale });
+    a.body.scale.set(0.7, 1, 0.7);
+    for (const sx of [-1, 1]) a.head.add(box(0.09, 0.08, 0.02, 0x0a0a0a, sx * 0.07, 0.03, 0.155));
+    a.head.add(box(0.2, 0.05, 0.02, 0x2a2a24, 0, -0.09, 0.155));
+    for (let k = 0; k < 3; k++) a.body.add(box(0.5, 0.04, 0.3, 0xe8e2cc, 0, 0.12 - k * 0.12, 0));
+    return a;
+  }
+
+  function wurm() {
+    const g = new C.Group(), inner = new C.Group();
+    g.add(inner);
+    const skin = 0xb8d8e8, belly = 0xe8f2f8, spine = 0x5a7a9a;
+    for (let k = 0; k < 7; k++) {
+      const s = 1 - k * 0.09, z = -k * 0.75, y = 0.5 + Math.sin(k * 0.9) * 0.18;
+      inner.add(box(1.1 * s, 0.9 * s, 0.8, skin, 0, y, z), box(0.9 * s, 0.2, 0.7, belly, 0, y - 0.45 * s, z), cone(0.12, 0.35 * s, spine, 0, y + 0.55 * s, z, 4));
+    }
+    inner.add(box(1.2, 0.8, 0.9, skin, 0, 1.1, 0.7), box(1.0, 0.25, 0.7, belly, 0, 0.75, 0.95));
+    for (const sx of [-1, 1]) {
+      inner.add(mesh(geo('BoxGeometry', 0.12, 0.1, 0.04), glow(0x5ad0ff), sx * 0.32, 1.25, 1.16, false));
+      const fang = cone(0.06, 0.28, 0xf8f8f0, sx * 0.25, 0.62, 1.2, 4); fang.rotation.x = Math.PI; inner.add(fang);
+      const horn = cone(0.1, 0.6, 0xe8f0f8, sx * 0.4, 1.65, 0.5, 5); horn.rotation.x = -0.6; inner.add(horn);
+    }
+    inner.scale.setScalar(1.3);
+    return { g, inner, kind: 'wolf', legs: [], height: 2.4 };
+  }
+
+  function scorpion() {
+    const g = new C.Group(), inner = new C.Group();
+    g.add(inner);
+    const c = 0x9a6a2a, d = 0x6a4418;
+    inner.add(box(0.6, 0.25, 0.75, c, 0, 0.32, 0), box(0.45, 0.2, 0.3, c, 0, 0.32, 0.48));
+    for (const sx of [-1, 1]) {
+      const arm = box(0.1, 0.08, 0.45, d, sx * 0.32, 0.35, 0.75); arm.rotation.y = -sx * 0.4; inner.add(arm);
+      inner.add(box(0.2, 0.12, 0.22, c, sx * 0.45, 0.35, 1.02), box(0.05, 0.05, 0.02, 0x1a1a1a, sx * 0.08, 0.44, 0.64));
+    }
+    let y = 0.4, z = -0.4;
+    for (let k = 0; k < 5; k++) {
+      const seg = box(0.16 - k * 0.015, 0.16, 0.22, k % 2 ? d : c, 0, y, z);
+      inner.add(seg);
+      y += 0.18; z -= 0.12 - k * 0.07;
+    }
+    const sting = cone(0.06, 0.25, 0x2a1a0a, 0, y, z + 0.12, 4); sting.rotation.x = 1.9; inner.add(sting);
+    const legs = [];
+    for (const [x, zz] of [[-0.35, 0.2], [0.35, 0.2], [-0.35, -0.15], [0.35, -0.15]]) {
+      const l = limb(0.06, 0.3, d);
+      l.position.set(x, 0.3, zz); l.rotation.z = x < 0 ? -0.6 : 0.6;
+      inner.add(l); legs.push(l);
+    }
+    return { g, inner, kind: 'wolf', legs, height: 1.0 };
+  }
+
   function makeMonster(m) {
     let a;
     if (m.type === 'wolf') a = wolf();
+    else if (m.type === 'lurker') {
+      a = beast({ body: [0.7, 0.45, 1.0], color: 0x4a5a3a, leg: 0x3a4a2a, legW: 0.14, legH: 0.28, eye: 0xe8e03a });
+      for (let k = 0; k < 4; k++) a.inner.add(cone(0.07, 0.22, 0x2a3a1a, 0, 0.78, 0.3 - k * 0.25, 4));
+      for (let k = 0; k < 3; k++) a.inner.add(box(0.75, 0.04, 0.08, 0x6a7a3a, 0, 0.75, 0.2 - k * 0.3));
+    } else if (m.type === 'scorpion') a = scorpion();
+    else if (m.type === 'bear') {
+      a = beast({ body: [0.8, 0.75, 1.3], color: 0xeef2f4, leg: 0xd8dee2, legW: 0.22, legH: 0.42 });
+      a.inner.add(box(0.2, 0.14, 0.2, 0x2a2a2a, 0, 0.98, 1.22));
+      for (const sx of [-1, 1]) a.inner.add(box(0.12, 0.12, 0.08, 0xd8dee2, sx * 0.2, 1.28, 0.85));
+      a.inner.scale.setScalar(1.15);
+      a.height = 1.6;
+    } else if (m.type === 'pirate') {
+      a = humanoid({ tunic: 0xe8e0d0, skin: 0xc8946a, legs: 0x2a2a3a, sleeve: 0xe8e0d0, scale: 0.88 });
+      a.body.add(box(0.44, 0.08, 0.28, 0x2a2a2a, 0, -0.1, 0), box(0.1, 0.5, 0.28, 0x8a2020, 0.1, 0, 0.01));
+      a.head.add(box(0.31, 0.1, 0.31, 0xa02a2a, 0, 0.12, 0), box(0.5, 0.05, 0.38, 0x1a1a1a, 0, 0.2, 0), cone(0.22, 0.14, 0x1a1a1a, 0, 0.29, 0, 3));
+      a.head.add(box(0.1, 0.08, 0.02, 0x0a0a0a, 0.07, 0.02, 0.16), box(0.3, 0.1, 0.06, 0x3a2414, 0, -0.12, 0.14));
+      a.hand.add(tool('sword', 1));
+    } else if (m.type === 'skeleton') {
+      a = skeletonBody(0.88);
+      a.armL.add(box(0.06, 0.38, 0.32, 0x6a5a3a, -0.08, -0.25, 0.05));
+      a.hand.add(tool('sword', 2));
+    } else if (m.type === 'cryptlord') {
+      a = skeletonBody(1.45, 0x3a2a4a);
+      a.body.add(box(0.52, 0.9, 0.34, 0x3a2a4a, 0, -0.4, 0));
+      a.head.add(box(0.36, 0.08, 0.36, 0xe8c547, 0, 0.18, 0));
+      for (let k = 0; k < 5; k++) a.head.add(cone(0.035, 0.12, 0xe8c547, -0.14 + k * 0.07, 0.27, 0.16, 4));
+      for (const sx of [-1, 1]) a.head.add(mesh(geo('BoxGeometry', 0.07, 0.05, 0.03), glow(0x9a5aff), sx * 0.07, 0.03, 0.16, false));
+      a.hand.add(tool('spear'));
+    } else if (m.type === 'troll') {
+      a = humanoid({ tunic: 0x5a4a32, skin: 0x7a8a7a, legs: 0x4a4030, sleeve: 0x7a8a7a, scale: 1.55 });
+      a.body.scale.set(1.25, 1, 1.2);
+      a.head.add(box(0.14, 0.12, 0.12, 0x6a7a6a, 0, -0.02, 0.18), box(0.34, 0.08, 0.06, 0x5a6a5a, 0, 0.12, 0.13));
+      for (const sx of [-1, 1]) a.head.add(cone(0.04, 0.1, 0xf2ead0, sx * 0.09, -0.13, 0.15, 4));
+      a.hand.add(tool('bigclub'));
+    } else if (m.type === 'wurm') a = wurm();
     else if (m.type === 'goblin') {
       a = humanoid({ tunic: 0x6b4f2a, skin: 0x6fae4a, legs: 0x4a3a22, sleeve: 0x6fae4a, scale: 0.62 });
       const l = cone(0.07, 0.2, 0x6fae4a, -0.19, 0.04, 0, 4), r = cone(0.07, 0.2, 0x6fae4a, 0.19, 0.04, 0, 4);
@@ -727,6 +836,57 @@ const Render3D = (() => {
       g.add(cyl(0.02, 0.02, 0.3, 0x1a1a1a, -0.7, 1.55, d / 2 + 0.25, 4), mesh(geo('BoxGeometry', 0.14, 0.18, 0.14), windowMat, -0.7, 1.35, d / 2 + 0.25, false));
       const gl = glowSprite(0xffb050, 1.6); gl.position.set(-0.7, 1.35, d / 2 + 0.3); g.add(gl);
     },
+    gloomwater: (g, r) => {
+      // Stilt houses: a plank deck on posts above the bog, reached by a short stair.
+      const w = 2.4, d = 2.2, up = 0.9, wood = choose([0x5a5040, 0x4e4636, 0x625844], r), post = 0x3a3022;
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1]]) g.add(cyl(0.08, 0.1, up + 0.2, post, sx * (w / 2 - 0.05), (up + 0.2) / 2 - 0.1, sz * (d / 2 + 0.2), 5));
+      g.add(box(w + 0.3, 0.12, d + 0.8, 0x6a5a40, 0, up, 0.2));
+      g.add(box(w, 1.45, d, wood, 0, up + 0.78, 0));
+      for (let k = 0; k < 5; k++) g.add(box(0.06, 1.45, 0.04, 0x3e3628, -w / 2 + 0.25 + k * (w - 0.5) / 4, up + 0.78, d / 2 + 0.02));
+      g.add(box(0.6, 1.0, 0.06, 0x2e281e, 0.3, up + 0.56, d / 2 + 0.04));
+      win(g, -0.6, up + 0.95, d / 2 + 0.05, 0, { w: 0.36, h: 0.36, frame: 0x3a3022 });
+      win(g, w / 2 + 0.03, up + 0.95, 0, Math.PI / 2, { w: 0.36, h: 0.36, frame: 0x3a3022 });
+      roof(g, w, d, 1.3, up + 1.5, choose([0x5a5a32, 0x4a4a2a, 0x625a36], r * 5), wood, { over: 0.4, thick: 0.26, ridge: 0x3a3a22 });
+      for (let k = 0; k < 4; k++) g.add(box(0.5, 0.08, 0.32, 0x6a5a40, 0.3, up - 0.18 - k * 0.22, d / 2 + 0.75 + k * 0.28));
+      for (const x of [-w / 2 - 0.1, w / 2 + 0.1]) g.add(box(0.05, 0.6, 0.05, post, x, up + 0.35, d / 2 + 0.55));
+      g.add(box(w + 0.2, 0.05, 0.05, post, 0, up + 0.62, d / 2 + 0.58));
+      g.add(cyl(0.02, 0.02, 0.4, 0x1a1a1a, -w / 2 - 0.05, up + 1.3, d / 2 + 0.5, 4), mesh(geo('BoxGeometry', 0.14, 0.18, 0.14), windowMat, -w / 2 - 0.05, up + 1.05, d / 2 + 0.5, false));
+      const gl = glowSprite(0xc8ff8a, 1.6); gl.position.set(-w / 2 - 0.05, up + 1.05, d / 2 + 0.5); g.add(gl);
+      if (r > 0.4) for (let k = 0; k < 3; k++) g.add(box(0.06, 0.3, 0.12, 0x8aa0a0, w / 2 + 0.25, up + 0.9 - k * 0.05, -0.5 + k * 0.4));
+      if (r < 0.5) g.add(box(0.5, 0.15, 1.3, 0x5a4630, -w / 2 - 0.7, 0.05, 0.2));
+    },
+    amberreach: (g, r) => {
+      // Flat-roofed adobe with jutting roof beams, some crowned with a little dome.
+      const w = 2.6, d = 2.4, h = choose([1.9, 2.2, 2.6], r), clay = choose([0xd8b07a, 0xe0bc88, 0xccA070, 0xe8caa0], r * 3);
+      const cloth = choose([0xb03a2a, 0x2a6a9a, 0xd08a2a, 0x7a3a8a], r * 11);
+      g.add(box(w, h, d, clay, 0, h / 2, 0), box(w + 0.1, 0.2, d + 0.1, clay, 0, h + 0.1, 0));
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(box(0.25, 0.2, 0.25, clay, sx * (w / 2 - 0.08), h + 0.3, sz * (d / 2 - 0.08)));
+      for (let k = 0; k < 4; k++) g.add(cyl(0.06, 0.06, 0.4, 0x6a4a2a, -w / 2 + 0.4 + k * (w - 0.8) / 3, h - 0.25, d / 2 + 0.15, 5).rotateX(Math.PI / 2));
+      g.add(box(0.7, 1.15, 0.06, 0x3a2414, 0, 0.6, d / 2 + 0.02), cyl(0.35, 0.35, 0.06, 0x3a2414, 0, 1.18, d / 2 + 0.02, 10).rotateX(Math.PI / 2));
+      win(g, -0.85, 1.25, d / 2 + 0.03, 0, { w: 0.3, h: 0.36, frame: 0x8a6a4a });
+      win(g, 0.85, 1.25, d / 2 + 0.03, 0, { w: 0.3, h: 0.36, frame: 0x8a6a4a });
+      win(g, w / 2 + 0.03, 1.3, 0, Math.PI / 2, { w: 0.3, h: 0.36, frame: 0x8a6a4a });
+      const aw = box(1.4, 0.05, 0.8, cloth, 0, 1.5, d / 2 + 0.38); aw.rotation.x = 0.25; g.add(aw);
+      for (const x of [-0.68, 0.68]) g.add(box(0.05, 1.5, 0.05, 0x6a4a2a, x, 0.75, d / 2 + 0.75));
+      if (r > 0.6) { g.add(cyl(0.6, 0.65, 0.3, clay, 0.4, h + 0.35, -0.3, 10), mesh(geo('SphereGeometry', 0.6, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), mat(choose([0xe8e0d0, 0x3a7a9a, 0xd8a04a], r * 17)), 0.4, h + 0.5, -0.3)); }
+      else { g.add(box(0.9, 0.06, 0.9, cloth, -0.5, h + 0.75, -0.4)); for (const [x, z] of [[-0.9, -0.8], [-0.1, -0.8], [-0.9, 0], [-0.1, 0]]) g.add(box(0.05, 0.6, 0.05, 0x6a4a2a, x, h + 0.45, z)); }
+      for (const x of [-w / 2 - 0.25, w / 2 + 0.25]) if (rnd(x * 7 + r * 99, 3) > 0.4) g.add(cyl(0.16, 0.12, 0.35, 0xb0583a, x, 0.18, d / 2 - 0.2, 7));
+    },
+    frosthollow: (g, r) => {
+      // Dark timber on a stone footing, steep snow-laden roof and a smoking chimney.
+      const w = 2.5, d = 2.4, wood = choose([0x5a4030, 0x4e382a, 0x664a36], r), snow = 0xf2f8fc, stone = 0x8a8a8e;
+      g.add(box(w + 0.15, 0.5, d + 0.15, stone, 0, 0.25, 0), box(w, 1.5, d, wood, 0, 1.25, 0));
+      timbers(g, w, d, 0.5, 1.5, 0x3a2a1e, r > 0.5);
+      door(g, d / 2, { color: 0x6a3a22, bands: true, step: stone, y: 0.5 });
+      win(g, -0.8, 1.35, d / 2 + 0.03, 0, { shutter: choose([0x2a4a6a, 0x7a2a2a, 0x2a5a3a], r * 7) });
+      win(g, 0.8, 1.35, d / 2 + 0.03, 0, { shutter: choose([0x2a4a6a, 0x7a2a2a, 0x2a5a3a], r * 7) });
+      win(g, -w / 2 - 0.03, 1.35, 0, -Math.PI / 2, {});
+      roof(g, w, d, 1.9, 2.0, snow, wood, { over: 0.4, thick: 0.2, ridge: 0xe0eaf0 });
+      for (const sx of [-1, 1]) for (let k = 0; k < 5; k++) g.add(cone(0.035, 0.22, 0xd8f0ff, sx * (w / 2 + 0.38), 1.88, -d / 2 - 0.2 + k * (d + 0.4) / 4, 4).rotateX(Math.PI));
+      g.add(box(0.5, 2.4, 0.5, stone, w * 0.25, 3.0, -0.4), box(0.6, 0.12, 0.6, snow, w * 0.25, 4.25, -0.4));
+      addSmoke(g, w * 0.25, 4.4, -0.4);
+      g.add(box(0.9, 0.5, 0.5, 0x8a6338, -w / 2 - 0.5, 0.25, 0.5), box(0.92, 0.1, 0.52, snow, -w / 2 - 0.5, 0.55, 0.5));
+    },
   };
 
   // ------------------------------------------------------------ landmarks
@@ -804,6 +964,45 @@ const Render3D = (() => {
     },
   };
 
+  Object.assign(LANDMARK_MODELS, {
+    stilthall: (g, w, d) => {
+      const up = 1.0, wood = 0x524a3a, post = 0x3a3022;
+      for (let k = 0; k <= 6; k++) for (const sz of [-1, 1]) g.add(cyl(0.12, 0.14, up + 0.3, post, -w / 2 + 0.5 + k * (w - 1) / 6, (up + 0.3) / 2 - 0.15, sz * (d / 2 - 0.2), 6));
+      g.add(box(w, 0.16, d + 0.6, 0x6a5a40, 0, up, 0.3), box(w - 1.0, 2.3, d - 0.8, wood, 0, up + 1.23, 0));
+      for (let k = 0; k < 9; k++) g.add(box(0.08, 2.3, 0.05, 0x3e3628, -w / 2 + 0.6 + k * (w - 1.2) / 8, up + 1.23, d / 2 - 0.38));
+      const rg = new C.Group(); roof(rg, d - 0.6, w - 0.8, 1.9, 0, 0x4a4a2a, wood, { over: 0.5, thick: 0.3, ridge: 0x32321e }); rg.rotation.y = Math.PI / 2; rg.position.y = up + 2.35; g.add(rg);
+      g.add(box(1.2, 1.6, 0.08, 0x2a241a, 0, up + 0.9, d / 2 - 0.36));
+      for (const x of [-2.4, -1.3, 1.3, 2.4]) win(g, x, up + 1.4, d / 2 - 0.35, 0, { frame: post });
+      for (let k = 0; k < 4; k++) g.add(box(1.2, 0.1, 0.3, 0x6a5a40, 0, up - 0.2 - k * 0.25, d / 2 + 0.75 + k * 0.3));
+      for (const x of [-w / 2 + 0.3, w / 2 - 0.3]) { g.add(cyl(0.05, 0.06, 2.6, post, x, up + 1.3, d / 2 + 0.45, 5), box(0.2, 0.25, 0.2, 0x2a2a2a, x, up + 2.7, d / 2 + 0.45)); const gl = glowSprite(0xc8ff8a, 2.4); gl.position.set(x, up + 2.7, d / 2 + 0.45); g.add(gl); }
+      for (let k = 0; k < 6; k++) g.add(box(0.6, 0.08, 0.1, 0x8aa0a0, -2 + k * 0.8, up + 2.1, d / 2 - 0.3));
+    },
+    sunspire: (g, w, d) => {
+      const clay = 0xe0bc88, trim = 0xc89858, blue = 0x2a6a9a;
+      g.add(box(w - 0.6, 3.2, d - 0.6, clay, 0, 1.6, 0), box(w - 0.4, 0.25, d - 0.4, trim, 0, 3.3, 0));
+      for (let k = 0; k < 3; k++) g.add(box(2.0 - k * 0.45, 2.0, 2.0 - k * 0.45, k % 2 ? trim : clay, 0, 4.4 + k * 2.0, 0));
+      g.add(cyl(0.55, 0.55, 0.4, clay, 0, 10.6, 0, 10), mesh(geo('SphereGeometry', 0.75, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat(blue), 0, 10.8, 0), cone(0.1, 0.9, 0xe8c547, 0, 11.9, 0, 6));
+      for (let k = 0; k < 3; k++) for (const s of [-1, 1]) win(g, s * 0.3, 4.6 + k * 2.0, (2.0 - k * 0.45) / 2 + 0.03, 0, { w: 0.18, h: 0.5, frame: trim });
+      g.add(box(1.4, 2.0, 0.08, 0x3a2414, 0, 1.0, d / 2 - 0.27), cyl(0.7, 0.7, 0.08, 0x3a2414, 0, 2.0, d / 2 - 0.27, 12).rotateX(Math.PI / 2));
+      for (const x of [-1.5, 1.5]) { g.add(box(0.06, 1.8, 0.06, 0x6a4a2a, x, 0.9, d / 2 + 0.6)); const aw = box(1.4, 0.05, 1.0, x < 0 ? 0xb03a2a : 0xd08a2a, x, 1.8, d / 2 + 0.2); aw.rotation.x = 0.2; g.add(aw); }
+      for (let k = 0; k < 6; k++) g.add(cyl(0.06, 0.06, 0.45, 0x6a4a2a, -1.8 + k * 0.72, 3.0, d / 2 - 0.1, 5).rotateX(Math.PI / 2));
+      const gl = glowSprite(0xffd890, 4); gl.position.y = 10.9; g.add(gl);
+    },
+    hearthhall: (g, w, d) => {
+      const wood = 0x4e382a, stone = 0x8a8a8e, snow = 0xf2f8fc;
+      g.add(box(w - 0.5, 0.7, d - 0.5, stone, 0, 0.35, 0), box(w - 0.8, 2.5, d - 0.8, wood, 0, 1.95, 0));
+      timbers(g, w - 0.8, d - 0.8, 0.7, 2.5, 0x2e2018, true);
+      const rg = new C.Group(); roof(rg, d - 0.6, w - 0.6, 2.6, 0, snow, wood, { over: 0.55, thick: 0.25, ridge: 0xe0eaf0 }); rg.rotation.y = Math.PI / 2; rg.position.y = 3.2; g.add(rg);
+      for (const sx of [-1, 1]) { const horn = cone(0.12, 1.1, 0x4e382a, sx * (w / 2 - 0.5), 6.1, d / 2 - 0.2, 5); horn.rotation.z = -sx * 0.5; g.add(horn); }
+      g.add(box(1.6, 1.9, 0.1, 0x5a3220, 0, 1.65, d / 2 - 0.35));
+      for (const yy of [1.1, 1.9]) g.add(box(1.62, 0.08, 0.12, 0x2a2a2e, 0, yy, d / 2 - 0.33));
+      for (const x of [-2.5, -1.5, 1.5, 2.5]) win(g, x, 2.1, d / 2 - 0.38, 0, { shutter: 0x2a4a6a });
+      for (const x of [-w / 2 + 1.0, w / 2 - 1.0]) { g.add(box(0.7, 5.6, 0.7, stone, x, 2.8, -d / 2 + 0.8), box(0.8, 0.15, 0.8, snow, x, 5.65, -d / 2 + 0.8)); addSmoke(g, x, 5.8, -d / 2 + 0.8); }
+      for (const x of [-1.4, 1.4]) { g.add(box(0.1, 1.6, 0.1, 0x2a2a2a, x, 0.8, d / 2 + 0.4)); flame(g, x, 1.75, d / 2 + 0.4, 0.8); const gl = glowSprite(0xff9a3a, 2.2); gl.position.set(x, 1.8, d / 2 + 0.4); g.add(gl); }
+      g.add(box(2.4, 0.15, 1.0, stone, 0, 0.08, d / 2 + 0.3));
+    },
+  });
+
   // Merge a static group into one mesh per material: hundreds of parts, a handful of draw calls.
   function bake(src) {
     src.updateMatrixWorld(true);
@@ -832,6 +1031,8 @@ const Render3D = (() => {
       out.add(ms);
     }
     for (const o of keep) out.attach(o);
+    // Smoke drifts from its own position, which is now in world space.
+    for (const sm of smoke) if (keep.includes(sm.p)) { sm.x = sm.p.position.x; sm.y = sm.p.position.y; sm.z = sm.p.position.z; }
     return out;
   }
 
@@ -926,13 +1127,32 @@ const Render3D = (() => {
     }
     buildTownLife();
     buildPois();
+    buildDungeons();
     buildSigns();
   }
 
 
   // ------------------------------------------------------------ town life: props, people, animals
-  const TOWN_COLORS = { ironhold: 0xb0302a, stonedeep: 0x4a5a8a, saltmere: 0x2a7aa0, thornwood: 0x3a7a2a, ratsnest: 0x2a2a2a };
+  const TOWN_COLORS = { ironhold: 0xb0302a, stonedeep: 0x4a5a8a, saltmere: 0x2a7aa0, thornwood: 0x3a7a2a, ratsnest: 0x2a2a2a,
+    gloomwater: 0x4a6a3a, amberreach: 0xd08a2a, frosthollow: 0x5a8ab8 };
   const PROP_MODELS = {
+    palm: g => {
+      const lean = 0.25 + Math.random() * 0.2, segs = 6;
+      let x = 0, y = 0;
+      for (let k = 0; k < segs; k++) {
+        const sg = cyl(0.13 - k * 0.012, 0.15 - k * 0.012, 0.55, k % 2 ? 0x8a6a42 : 0x9a7a4e, x, y + 0.27, 0, 6);
+        sg.rotation.z = -lean * (k / segs);
+        g.add(sg);
+        x += Math.sin(lean * k / segs) * 0.55; y += 0.53;
+      }
+      for (let k = 0; k < 7; k++) {
+        const a = k / 7 * Math.PI * 2, fr = new C.Group();
+        fr.position.set(x, y, 0); fr.rotation.y = a;
+        const leaf = box(0.32, 0.04, 1.3, k % 2 ? 0x3a8a3a : 0x4a9a3a, 0, 0, 0.6); leaf.rotation.x = 0.45;
+        fr.add(leaf); g.add(fr);
+      }
+      for (let k = 0; k < 3; k++) g.add(mesh(geo('IcosahedronGeometry', 0.09, 0), mat(0x6a4a22), x + Math.cos(k * 2) * 0.14, y - 0.1, Math.sin(k * 2) * 0.14));
+    },
     stall: (g, town, p) => {
       const goods = (p && p.goods) || 'produce';
       const awn = { produce: 0x3a8a3a, bread: 0xc8a050, cloth: 0x7a3a9a, pottery: 0xb0583a, meat: 0xa02a2a, tools: 0x3a5a7a, flowers: 0xd05a8a,
@@ -1218,7 +1438,55 @@ const Render3D = (() => {
     tent: PROP_MODELS.tent,
     firepit: g => { for (let k = 0; k < 7; k++) { const a = k / 7 * Math.PI * 2; g.add(mesh(geo('DodecahedronGeometry', 0.09, 0), mat(0x6a655e), Math.cos(a) * 0.3, 0.05, Math.sin(a) * 0.3)); } g.add(cyl(0.22, 0.25, 0.04, 0x2a2420, 0, 0.02, 0, 8)); },
     crates: PROP_MODELS.crates,
+    mound: g => {
+      g.add(mesh(geo('DodecahedronGeometry', 0.9, 0), mat(0x5e5a54), 0, 0.35, 0), mesh(geo('DodecahedronGeometry', 0.5, 0), mat(0x6e6a62), 0.4, 0.6, 0.3));
+      g.add(box(1.2, 0.12, 1.0, 0x4a6a32, 0, 0.95, 0));
+    },
   };
+
+  // A stair cut into a stone arch on the surface, a ladder up a light shaft below.
+  function portalModel(down) {
+    const g = new C.Group();
+    if (down) {
+      for (const x of [-0.75, 0.75]) g.add(box(0.4, 2.2, 0.5, 0x7a766e, x, 1.1, -0.3));
+      g.add(box(2.0, 0.45, 0.6, 0x6a665e, 0, 2.4, -0.3), box(1.1, 1.9, 0.1, 0x050404, 0, 0.95, -0.25));
+      for (let k = 0; k < 4; k++) g.add(box(1.0, 0.1, 0.3, 0x5a564e, 0, 0.5 - k * 0.12, -0.15 - k * 0.1));
+      for (const x of [-1.15, 1.15]) { g.add(box(0.08, 1.3, 0.08, 0x2a2a2a, x, 0.65, 0.1)); flame(g, x, 1.4, 0.1, 0.7); const gl = glowSprite(0xff9a3a, 2.0, false); gl.position.set(x, 1.45, 0.1); g.add(gl); }
+      g.add(mesh(geo('DodecahedronGeometry', 0.18, 0), mat(0xe8e2cc), 0.5, 2.75, -0.1));
+    } else {
+      for (const x of [-0.25, 0.25]) g.add(box(0.07, 4.0, 0.07, 0x6b4a2b, x, 2.0, 0));
+      for (let k = 0; k < 10; k++) g.add(box(0.5, 0.05, 0.05, 0x7a5a32, 0, 0.3 + k * 0.38, 0));
+      const shaft = new C.Mesh(geo('CylinderGeometry', 0.6, 0.9, 6, 8, 1, true), new C.MeshBasicMaterial({ color: 0xfff2c8, transparent: true, opacity: 0.12, depthWrite: false, side: C.DoubleSide, fog: false }));
+      shaft.position.y = 3; shaft.userData.noBake = true;
+      g.add(shaft);
+      const gl = glowSprite(0xfff2c8, 3.2, false); gl.position.y = 3.5; g.add(gl);
+    }
+    return g;
+  }
+
+  // Wall torches, bones and rubble along the dungeon halls.
+  function buildDungeons() {
+    for (const dg of DUNGEONS) {
+      const g = new C.Group();
+      for (const tc of dungeonTorches.filter(t => t.dungeon === dg.id)) {
+        const dir = [[1, 0], [-1, 0], [0, 1], [0, -1]].find(([a, b]) => !dungeonMask[idx(tc.x + a, tc.y + b)]);
+        const x = tc.x + dir[0] * 0.42, z = tc.y + dir[1] * 0.42, h = tileH[idx(tc.x, tc.y)];
+        g.add(box(0.1, 0.4, 0.1, 0x2a2a2a, x, h + 1.4, z), box(0.16, 0.12, 0.16, 0x3a3a3a, x, h + 1.65, z));
+        flame(g, x, h + 1.82, z, 0.7);
+        const gl = glowSprite(0xff9a3a, 2.6, false); gl.position.set(x, h + 1.85, z); g.add(gl);
+      }
+      for (let y = dg.y0; y < dg.y0 + dg.h; y++) for (let x = dg.x0; x < dg.x0 + dg.w; x++) {
+        const i = idx(x, y);
+        if (!dungeonMask[i] || services.has(i)) continue;
+        const r = rnd(i, 41), h = tileH[i];
+        if (r < 0.025) { g.add(mesh(geo('DodecahedronGeometry', 0.12, 0), mat(0xe8e2cc), x, h + 0.1, y), box(0.4, 0.05, 0.06, 0xd8d2bc, x + 0.15, h + 0.03, y + 0.1)); }
+        else if (r < 0.06) g.add(mesh(geo('DodecahedronGeometry', 0.25 + rnd(i, 42) * 0.2, 0), mat(dg.id === 'cavern' ? 0x6a7a8a : 0x5a554e), x, h + 0.1, y));
+        else if (r < 0.075 && dg.id === 'cavern') { const c = mesh(geo('OctahedronGeometry', 0.18, 0), mat(0x9adfff, { emissive: 0x3a8fcf, emissiveIntensity: 0.8 }), x, h + 0.2, y); c.scale.y = 2.2; g.add(c); }
+        else if (r < 0.075) g.add(cyl(0.18, 0.2, 0.5, 0x5a3a20, x, h + 0.25, y, 7));
+      }
+      scene.add(bake(g));
+    }
+  }
 
   function chestModel(open) {
     const g = new C.Group();
@@ -1243,13 +1511,17 @@ const Render3D = (() => {
         pg.rotation.y = part.rot || Math.random() * 0.4;
         g.add(pg);
       }
-      let chest = null;
+      const chests = [];
       for (const [i, svc] of services) {
-        if (svc.poi !== p.id) continue;
+        if (svc.poi !== p.id && svc.poi !== p.id + '_hoard') continue;
         const x = i % W, y = (i - x) / W;
         const sg = new C.Group();
-        if (svc.type === 'chest') { chest = chestModel(!!state.opened[p.id]); sg.add(chest); }
-        else {
+        if (svc.type === 'chest') { const chest = chestModel(!!state.opened[svc.poi]); chests.push({ chest, key: svc.poi }); sg.add(chest); }
+        else if (svc.type === 'portal') {
+          const below = !!inDungeonRect(x, y);
+          sg.add(portalModel(!below));
+          if (below) { const lb = makeLabel(svc.label, { color: '#ffe9a8', h: 0.3 }); lb.position.y = 3.2; sg.add(lb); }
+        } else {
           sg.add(cyl(0.45, 0.55, 0.6, 0x8a857c, 0, 0.3, 0, 6), cyl(0.3, 0.35, 0.25, 0x9a958c, 0, 0.72, 0, 6));
           const crystal = mesh(geo('OctahedronGeometry', 0.25, 0), mat(0x9adfff, { emissive: 0x3a9fdf, emissiveIntensity: 1 }), 0, 1.2, 0, false);
           crystal.userData.spin = true;
@@ -1265,7 +1537,7 @@ const Render3D = (() => {
       label.position.set(p.x, tileH[idx(p.x, p.y)] + 3, p.y);
       g.add(label);
       scene.add(g);
-      poiObjs.push({ p, g, label, chest });
+      poiObjs.push({ p, g, label, chests });
     }
   }
 
@@ -1321,6 +1593,8 @@ const Render3D = (() => {
     log:      { geo: () => { const c = new C.CylinderGeometry(0.12, 0.14, 1.3, 6); c.rotateZ(Math.PI / 2); c.translate(0, 0.12, 0); return c; }, cap: 400 },
     reed:     { geo: () => reedGeo(), cap: 3000 },
     lily:     { geo: () => { const c = new C.CylinderGeometry(0.2, 0.2, 0.02, 7); c.translate(0, 0.0, 0); return c; }, cap: 1500 },
+    cactus:   { geo: () => { const t = new C.CylinderGeometry(0.12, 0.14, 1.1, 6); t.translate(0, 0.55, 0); const a = new C.CylinderGeometry(0.07, 0.07, 0.4, 5); a.translate(0.2, 0.75, 0); const b = new C.CylinderGeometry(0.07, 0.07, 0.3, 5); b.translate(-0.2, 0.55, 0); const c = new C.CylinderGeometry(0.06, 0.06, 0.18, 5); c.rotateZ(Math.PI / 2); c.translate(0.14, 0.58, 0); const d = c.clone(); d.translate(-0.28, -0.2, 0); return mergeGeos([t, a, b, c, d]); }, cap: 700 },
+    snow:     { geo: () => { const c = new C.SphereGeometry(0.4, 7, 4, 0, Math.PI * 2, 0, Math.PI / 2); c.scale(1, 0.35, 0.8); return c; }, cap: 2500 },
   };
   const clutter = {};
   let clutterX = -999, clutterY = -999;
@@ -1336,7 +1610,8 @@ const Render3D = (() => {
       clutter[k] = im;
     }
   }
-  const BIOME_GRASS = { [BIOME.MEADOW]: 0x6aa83a, [BIOME.FOREST]: 0x4a8a30, [BIOME.BADLANDS]: 0xb0a058, [BIOME.HIGHLANDS]: 0x7a9a6a };
+  const BIOME_GRASS = { [BIOME.MEADOW]: 0x6aa83a, [BIOME.FOREST]: 0x4a8a30, [BIOME.BADLANDS]: 0xb0a058, [BIOME.HIGHLANDS]: 0x7a9a6a,
+    [BIOME.MARSH]: 0x5a7a3a, [BIOME.DESERT]: 0xb8a868, [BIOME.TAIGA]: 0x7a9a82, [BIOME.ISLES]: 0x6ab040 };
   const FLOWER_COLORS = [0xf04a5a, 0xf0d040, 0xffffff, 0xb070f0, 0x5a9af0, 0xff9a3a];
   function streamClutter() {
     clutterX = Math.round(player.vx); clutterY = Math.round(player.vz);
@@ -1364,11 +1639,15 @@ const Render3D = (() => {
       if (t !== T.GRASS && t !== T.SAND) continue;
       const hasNode = nodes.has(i);
       if (near(x, y, T.WATER) && r1 < 0.45 * dens) { const px = jx(), pz = jz(); put('reed', px, pz, gh(px, pz), r2 * 6, 0.8 + r3 * 0.5, 0x6a8a3a); }
+      if (b === BIOME.DESERT && t === T.SAND && r3 < 0.025 * dens && !hasNode) { const px = jx(), pz = jz(); put('cactus', px, pz, gh(px, pz), r1 * 6, 0.7 + r2 * 0.6, 0x4a7a3a); }
       if (t === T.SAND) { if (r2 < 0.08 * dens) { const px = jx(), pz = jz(); put('rock', px, pz, gh(px, pz), r3 * 6, 0.6 + r1, 0xa09a90); } continue; }
-      const grassP = { [BIOME.MEADOW]: 0.95, [BIOME.FOREST]: 0.75, [BIOME.HIGHLANDS]: 0.6, [BIOME.BADLANDS]: 0.35 }[b] * dens * (hasNode ? 0.5 : 1);
+      const grassP = ({ [BIOME.MEADOW]: 0.95, [BIOME.FOREST]: 0.75, [BIOME.HIGHLANDS]: 0.6, [BIOME.BADLANDS]: 0.35, [BIOME.MARSH]: 0.9, [BIOME.DESERT]: 0.12, [BIOME.TAIGA]: 0.4, [BIOME.ISLES]: 0.85 }[b] || 0) * dens * (hasNode ? 0.5 : 1);
       const tufts = r1 < grassP ? (r2 < 0.5 ? 2 : 1) : 0;
       for (let k = 0; k < tufts; k++) { const px = jx(), pz = jz(); put('tuft', px, pz, gh(px, pz), Math.random() * 6, 0.5 + Math.random() * 0.4, tileH[i] > 1.6 ? 0x8a9a6a : BIOME_GRASS[b]); }
       if (hasNode) continue;
+      if (b === BIOME.TAIGA && r3 < 0.3 * dens) { const px = jx(), pz = jz(); put('snow', px, pz, gh(px, pz) - 0.02, r1 * 6, 0.7 + r2 * 0.9, 0xf2f8fc); }
+      if (b === BIOME.MARSH && r3 > 0.9 - 0.06 * dens) { const px = jx(), pz = jz(); put('mushroom', px, pz, gh(px, pz), 0, 0.8 + r1, r2 < 0.5 ? 0xa8b04a : 0x8a7a5a); }
+      if (b === BIOME.ISLES && r3 < 0.06 * dens) { const c = FLOWER_COLORS[Math.floor(r2 * FLOWER_COLORS.length)]; const px = jx(), pz = jz(); put('flower', px, pz, gh(px, pz), 0, 1, c); }
       if ((b === BIOME.MEADOW && r3 < 0.13 * dens) || (b === BIOME.HIGHLANDS && r3 < 0.05 * dens)) {
         const c = FLOWER_COLORS[Math.floor(r2 * FLOWER_COLORS.length)];
         for (let k = 0; k < 3; k++) { const px = jx(), pz = jz(); put('flower', px, pz, gh(px, pz), 0, 0.8 + Math.random() * 0.5, c); }
@@ -1390,7 +1669,7 @@ const Render3D = (() => {
       if (terrain[i] !== T.GRASS || nodes.has(i) || townAt(x, y, 6)) continue;
       const b = biome[i];
       if (kind === 'rabbit' && b !== BIOME.MEADOW && b !== BIOME.HIGHLANDS) continue;
-      if (kind === 'deer' && b === BIOME.BADLANDS) continue;
+      if (kind === 'deer' && (b === BIOME.BADLANDS || b === BIOME.DESERT || b === BIOME.MARSH || b === BIOME.ISLES)) continue;
       const m = animal(kind);
       const c = { kind, a: m, x, z: y, tx: x, tz: y, pause: Math.random() * 3, speed: kind === 'deer' ? 1.3 : 1.6, flee: 0 };
       m.g.position.set(x, gh(x, y), y);
@@ -1531,11 +1810,15 @@ const Render3D = (() => {
     fogAmt += ((w === 'fog' ? 1 : 0) - fogAmt) * Math.min(1, dt * 0.2);
     cloudAmt += ((w === 'clear' ? 0.25 : 1) - cloudAmt) * Math.min(1, dt * 0.2);
     const gloom = Math.max(rainAmt * 0.7, fogAmt * 0.4, (cloudAmt - 0.25) * 0.3);
+    // Underground the sky goes black and only torches and your lantern light the way.
+    const below = inDungeonRect(Math.round(player.vx), Math.round(player.vz)) ? 1 : 0;
+    underAmt = Math.abs(below - underAmt) > 0.5 ? below : underAmt + (below - underAmt) * Math.min(1, dt * 3);
     // Sky colour: night blue, day blue, with warm dawn and dusk and grey weather.
     const dusk = Math.max(0, 1 - Math.abs(time - 0.25) / 0.05) + Math.max(0, 1 - Math.abs(time - 0.75) / 0.05);
     cA.setHex(0x0c1630).lerp(cB.setHex(SKY), day);
     cA.lerp(cB.setHex(0xf09a6a), Math.min(1, dusk) * 0.55);
     cA.lerp(cB.setHex(day > 0.3 ? 0x8a96a2 : 0x1a2028), gloom);
+    cA.lerp(cB.setHex(0x060508), underAmt);
     scene.background.copy(cA);
     scene.fog.color.copy(cA);
     // Sun by day, a pale moon by night.
@@ -1544,22 +1827,26 @@ const Render3D = (() => {
     sun.position.set(camPos.x + dir[0] * 40, camPos.y + dir[1] * 40, camPos.z + dir[2] * 40);
     sun.color.setHex(up > -0.05 ? 0xfff1d6 : 0x9ab0ff).lerp(cB.setHex(0xffa060), Math.min(1, dusk) * 0.6);
     sun.intensity = (up > -0.05 ? 0.2 + 0.55 * day : 0.22) * (1 - gloom * 0.5);
-    hemi.intensity = 0.18 + 0.38 * day;
+    sun.intensity *= 1 - underAmt * 0.9;
+    hemi.intensity = (0.18 + 0.38 * day) * (1 - underAmt * 0.55);
     hemi.color.setHex(0x6a7ab8).lerp(cB.setHex(0xdfefff), day);
     stars.material.opacity = clamp(1 - day * 1.6, 0, 1) * (1 - cloudAmt * 0.7);
     stars.position.copy(camPos);
-    lantern.intensity = clamp(1 - day * 1.5, 0, 1) * 1.3;
+    lantern.intensity = Math.max(clamp(1 - day * 1.5, 0, 1) * 1.3, underAmt * 1.6);
+    lantern.distance = 11 + underAmt * 5;
     windowMat.emissiveIntensity = clamp(1.2 - day * 1.6, 0, 1);
-    const night = clamp(1 - day * 1.5, 0, 1);
+    const night = Math.max(clamp(1 - day * 1.5, 0, 1), underAmt);
+    stars.visible = underAmt < 0.5;
     for (const gl of glows) gl.sp.material.opacity = gl.nightOnly ? night * 0.9 : 0.35 + night * 0.55;
     for (const c of clouds) {
       c.userData.off[0] += dt * 1.5;
       if (c.userData.off[0] > 120) c.userData.off[0] -= 240;
       c.position.set(camPos.x + c.userData.off[0], c.userData.off[1], camPos.z + c.userData.off[2]);
-      c.visible = c.id % 4 < Math.round(cloudAmt * 4);
+      c.visible = underAmt < 0.5 && c.id % 4 < Math.round(cloudAmt * 4);
       c.userData.mat.color.setHex(0xffffff).lerp(cB.setHex(0x6a7280), gloom).multiplyScalar(0.35 + 0.65 * day);
     }
-    rain.visible = rainAmt > 0.02;
+    rain.visible = rainAmt > 0.02 && underAmt < 0.5;
+    waterMesh.visible = underAmt < 0.5;
     if (rain.visible) {
       const arr = rain.geometry.attributes.position.array, drops = rain.userData.drops;
       for (let k = 0; k < drops.length; k++) {
@@ -2143,7 +2430,7 @@ const Render3D = (() => {
     }
     for (const po of poiObjs) {
       po.label.visible = Math.hypot(po.p.x - player.vx, po.p.y - player.vz) < 22;
-      if (po.chest) po.chest.userData.lid.rotation.x += ((state.opened[po.p.id] ? -1.6 : 0) - po.chest.userData.lid.rotation.x) * Math.min(1, dt * 5);
+      for (const { chest, key } of po.chests) chest.userData.lid.rotation.x += ((state.opened[key] ? -1.6 : 0) - chest.userData.lid.rotation.x) * Math.min(1, dt * 5);
       po.g.traverse(o => { if (o.userData.spin) { o.rotation.y = t; o.position.y = 1.2 + Math.sin(t * 2) * 0.08; } });
     }
     updateCritters(dt, t);
@@ -2203,6 +2490,7 @@ const Render3D = (() => {
     const thick = (1 - fogAmt * 0.6) * (1 - rainAmt * 0.3) * (1 - gloom * 0.1);
     scene.fog.near = (34 + zoom + alt) * Q.fog * thick;
     scene.fog.far = (62 + zoom * 1.5 + alt * 1.5) * Q.fog * thick;
+    if (underAmt > 0) { scene.fog.near = lerp(scene.fog.near, 6 + zoom * 0.5, underAmt); scene.fog.far = lerp(scene.fog.far, 22 + zoom, underAmt); }
     sun.target.position.set(camX, camY, camZ);
 
     drawMinimap();
