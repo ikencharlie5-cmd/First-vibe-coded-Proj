@@ -239,6 +239,21 @@ const Render3D = (() => {
       }
       if (b.pier && rnd(c, 4) < 0.5) g.add(cyl(0.1, 0.12, dh - bed, 0x4a3018, x + 0.4, bed + (dh - bed) / 2, y + 0.4, 6));
     }
+    // Ramps onto each bank, with stone or timber footings where the deck stands proud of the ground.
+    for (const c of b.approach) {
+      const x = c % W, y = (c - x) / W;
+      const cs = [[x - 0.5, y - 0.5], [x + 0.5, y - 0.5], [x + 0.5, y + 0.5], [x - 0.5, y + 0.5]].map(([px, py]) => [px, groundHeight(px, py) + 0.02, py]);
+      tri(top, cs[0], cs[3], cs[1], cs[1], cs[3], cs[2]);
+      shade.setHex(st.deck[(x + y) % 2]).offsetHSL(0, 0, -0.03);
+      for (let n = 0; n < 6; n++) col.push(shade.r, shade.g, shade.b);
+      const lo = Math.min(...[[x - 0.5, y - 0.5], [x + 0.5, y - 0.5], [x + 0.5, y + 0.5], [x - 0.5, y + 0.5]].map(([px, py]) => terrainHeight(px, py)));
+      const hi = Math.min(...cs.map(p => p[1]));
+      if (hi - lo > 0.06) {
+        const h = hi - lo + 0.3;
+        if (b.style === 'stone') g.add(box(1.0, h, 1.0, st.side, x, lo - 0.3 + h / 2, y));
+        else g.add(box(0.9, h, 0.9, 0x5a3a20, x, lo - 0.3 + h / 2, y));
+      }
+    }
     const tg = new C.BufferGeometry();
     tg.setAttribute('position', new C.Float32BufferAttribute(top, 3));
     tg.setAttribute('color', new C.Float32BufferAttribute(col, 3));
@@ -658,17 +673,75 @@ const Render3D = (() => {
     if (kind) player.hand.add(tool(kind, tier));
   }
 
+  // Armour you can see: helmets, breastplates and shoulder guards, leg armour and boots, in each set's colour.
+  const shadeHex = (c, k) => new C.Color(c).offsetHSL(0, 0, k).getHex();
   function updatePlayerGear() {
     const eq = state.equip, key = JSON.stringify(eq);
     if (key === player.equipKey) return;
     player.equipKey = key;
-    const tierOf = id => (id ? ITEMS[id].tier : 0);
-    player.body.material = mat(eq.body ? TIER_COLORS[tierOf(eq.body)] : 0x2f5d9e);
-    player.helm.visible = !!eq.head;
+    for (const m of player.armor || []) if (m.parent) m.parent.remove(m);
+    player.armor = [];
+    const add = (parent, o) => { parent.add(o); player.armor.push(o); return o; };
+    const look = id => { const it = ITEMS[id]; return { c: it.color != null ? it.color : TIER_COLORS[it.tier] || 0x9c9c9c, fam: it.family, tier: it.tier, metal: it.color == null }; };
+    const furry = f => f === 'bearfur' || f === 'leather' || f === 'lurker';
+    const scaly = f => f === 'drake' || f === 'wurm';
+
+    if (eq.body) {
+      const L = look(eq.body), dark = shadeHex(L.c, -0.18), light = shadeHex(L.c, 0.15);
+      player.body.material = mat(L.c);
+      add(player.body, box(0.45, 0.07, 0.29, 0x3a2614, 0, -0.17, 0));
+      if (L.metal) add(player.body, box(0.06, 0.38, 0.02, light, 0, 0.04, 0.135));
+      if (L.fam === 'bearfur') add(player.body, box(0.5, 0.11, 0.34, 0xf4f6f8, 0, 0.23, 0));
+      for (const arm of [player.armL, player.armR]) {
+        if (furry(L.fam)) add(arm, mesh(geo('IcosahedronGeometry', 0.13, 0), mat(L.c), 0, -0.02, 0));
+        else add(arm, box(0.21, 0.12, 0.23, dark, 0, -0.01, 0));
+        if (scaly(L.fam) || L.fam === 'troll') { const sp = cone(0.04, 0.16, light, 0, 0.1, 0, 4); add(arm, sp); }
+        arm.children[0].material = mat(furry(L.fam) ? L.c : dark);
+      }
+    } else {
+      player.body.material = mat(0x2f5d9e);
+      for (const arm of [player.armL, player.armR]) arm.children[0].material = mat(0x2f5d9e);
+    }
+
     player.hair.visible = !eq.head;
-    if (eq.head) player.helm.material = mat(TIER_COLORS[tierOf(eq.head)]);
+    player.helm.visible = false;
+    if (eq.head) {
+      const L = look(eq.head), light = shadeHex(L.c, 0.15), h = player.head;
+      if (L.metal) {
+        add(h, box(0.34, 0.17, 0.34, L.c, 0, 0.1, 0));
+        add(h, box(0.05, 0.16, 0.03, L.c, 0, -0.02, 0.165));
+        if (L.tier >= 3) add(h, box(0.04, 0.12, 0.3, L.tier >= 4 ? 0x8f7bff : 0xb0302a, 0, 0.24, -0.02));
+      } else if (furry(L.fam)) {
+        add(h, box(0.36, 0.2, 0.36, L.c, 0, 0.1, -0.01));
+        add(h, box(0.32, 0.28, 0.07, L.c, 0, -0.04, -0.17));
+        if (L.fam === 'bearfur') add(h, box(0.38, 0.06, 0.38, 0xf4f6f8, 0, 0.02, 0));
+      } else {
+        add(h, box(0.35, 0.18, 0.35, L.c, 0, 0.1, 0));
+        add(h, box(0.05, 0.14, 0.03, L.c, 0, -0.02, 0.165));
+        for (const sx of [-1, 1]) {
+          const horn = cone(0.05, L.fam === 'troll' ? 0.14 : 0.26, light, sx * 0.17, 0.22, 0, 5);
+          horn.rotation.z = -sx * 0.5;
+          add(h, horn);
+        }
+        if (L.fam === 'wurm') for (let k = 0; k < 3; k++) add(h, cone(0.03, 0.14, 0x9adfff, -0.08 + k * 0.08, 0.26, 0.12, 4));
+      }
+    }
+
+    for (const leg of [player.legL, player.legR]) {
+      if (eq.legs) {
+        const L = look(eq.legs);
+        leg.children[0].material = mat(L.c);
+        if (L.metal || scaly(L.fam)) add(leg, box(0.17, 0.1, 0.05, shadeHex(L.c, 0.15), 0, -0.22, 0.08));
+      } else leg.children[0].material = mat(0x5b4630);
+      if (eq.feet) {
+        const L = look(eq.feet);
+        add(leg, box(0.18, 0.14, 0.25, L.c, 0, -0.47, 0.03));
+        if (furry(L.fam)) add(leg, box(0.2, 0.05, 0.2, shadeHex(L.c, 0.2), 0, -0.38, 0));
+      }
+    }
+
     player.shield.visible = !!eq.shield;
-    if (eq.shield) player.shield.material = mat(TIER_COLORS[tierOf(eq.shield)]);
+    if (eq.shield) player.shield.material = mat(TIER_COLORS[ITEMS[eq.shield].tier] || 0x9c9c9c);
   }
 
   function hpBar() {
@@ -2908,9 +2981,19 @@ const Render3D = (() => {
       animateLimbs(player, moving, acting && !moving && !combat.blocking, dt, t, keys.has('shift') ? 17 : 13);
       if (combat.blocking) { player.armL.rotation.x = -1.5; player.armR.rotation.x = -0.9; }
     }
-    // A forward roll while dodging.
-    player.inner.rotation.x = combat.dodgeLeft > 0 ? (1 - combat.dodgeLeft / DODGE.time) * Math.PI * 2 : 0;
-    if (combat.dodgeLeft > 0) player.inner.position.y = 0.3;
+    // A tucked forward roll in the direction you dodge, spinning around your middle so you never sink into the ground.
+    if (combat.dodgeLeft > 0) {
+      const a = (1 - combat.dodgeLeft / DODGE.time) * Math.PI * 2, c = 0.55;
+      player.rot = Math.atan2(combat.dodgeX, combat.dodgeY);
+      player.g.rotation.y = player.rot;
+      player.inner.rotation.x = a;
+      player.inner.position.set(0, c - c * Math.cos(a) + Math.sin(a / 2) * 0.15, -c * Math.sin(a));
+      player.legL.rotation.x = player.legR.rotation.x = -1.6;
+      player.armL.rotation.x = player.armR.rotation.x = -2.2;
+    } else {
+      player.inner.rotation.x = 0;
+      player.inner.position.z = 0;
+    }
     // Footsteps, softer on grass than on stone.
     const ph = Math.floor(player.walk / Math.PI);
     if (moving && !afloat && ph !== stepPhase && (!state.mounted || ph % 2)) {

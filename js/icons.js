@@ -12,6 +12,8 @@ const Icons = (() => {
     const c = [n >> 16, (n >> 8) & 255, n & 255].map(v => Math.max(0, Math.min(255, Math.round(k > 0 ? v + (255 - v) * k : v * (1 + k)))));
     return `rgb(${c.join(',')})`;
   }
+  // Metal names map to their colour; anything else is already a colour.
+  const colorOf = m => METAL[m] || m;
   function outline(g, w = 3) { g.lineWidth = w; g.strokeStyle = 'rgba(25,15,5,0.85)'; g.lineJoin = 'round'; g.stroke(); }
   function poly(g, pts, fill) {
     g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
@@ -71,19 +73,22 @@ const Icons = (() => {
       g.restore();
     },
     shield(g, metal) {
-      poly(g, [[14, 12], [50, 12], [50, 34], [32, 54], [14, 34]], METAL[metal]);
-      poly(g, [[20, 17], [44, 17], [44, 33], [32, 47], [20, 33]], shade(METAL[metal], -0.18));
-      ellipse(g, 32, 29, 5, 5, shade(METAL[metal], 0.4));
+      const c = colorOf(metal);
+      poly(g, [[14, 12], [50, 12], [50, 34], [32, 54], [14, 34]], c);
+      poly(g, [[20, 17], [44, 17], [44, 33], [32, 47], [20, 33]], shade(c, -0.18));
+      ellipse(g, 32, 29, 5, 5, shade(c, 0.4));
     },
     helm(g, metal) {
+      const c = colorOf(metal);
       g.beginPath(); g.moveTo(12, 46); g.lineTo(12, 30); g.arc(32, 30, 20, Math.PI, 0); g.lineTo(52, 46); g.closePath();
-      g.fillStyle = METAL[metal]; g.fill(); outline(g);
-      poly(g, [[29, 30], [35, 30], [35, 50], [29, 50]], shade(METAL[metal], -0.25));
+      g.fillStyle = c; g.fill(); outline(g);
+      poly(g, [[29, 30], [35, 30], [35, 50], [29, 50]], shade(c, -0.25));
       g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(16, 32, 11, 5); g.fillRect(37, 32, 11, 5);
     },
     platebody(g, metal) {
-      poly(g, [[14, 14], [24, 10], [32, 16], [40, 10], [50, 14], [54, 30], [46, 32], [46, 54], [18, 54], [18, 32], [10, 30]], METAL[metal]);
-      g.beginPath(); g.moveTo(32, 18); g.lineTo(32, 52); g.strokeStyle = shade(METAL[metal], -0.3); g.lineWidth = 2; g.stroke();
+      const c = colorOf(metal);
+      poly(g, [[14, 14], [24, 10], [32, 16], [40, 10], [50, 14], [54, 30], [46, 32], [46, 54], [18, 54], [18, 32], [10, 30]], c);
+      g.beginPath(); g.moveTo(32, 18); g.lineTo(32, 52); g.strokeStyle = shade(c, -0.3); g.lineWidth = 2; g.stroke();
       g.beginPath(); g.moveTo(20, 38); g.lineTo(44, 38); g.stroke();
     },
     axe(g, metal) {
@@ -122,6 +127,19 @@ const Icons = (() => {
       poly(g, [[16, 24], [48, 24], [44, 36], [20, 36]], shade(color, -0.2));
       g.beginPath(); g.arc(32, 18, 9, Math.PI, 0); g.strokeStyle = '#3a2210'; g.lineWidth = 4; g.stroke();
       ellipse(g, 32, 34, 3, 3, '#d9b14a');
+    },
+    legs(g, metal) {
+      const c = colorOf(metal);
+      poly(g, [[16, 10], [48, 10], [50, 22], [46, 56], [36, 56], [32, 26], [28, 56], [18, 56], [14, 22]], c);
+      poly(g, [[16, 10], [48, 10], [48, 16], [16, 16]], shade(c, -0.3));
+      ellipse(g, 23, 36, 4, 3, shade(c, 0.3)); ellipse(g, 41, 36, 4, 3, shade(c, 0.3));
+    },
+    boots(g, metal) {
+      const c = colorOf(metal);
+      for (const x of [10, 34]) {
+        poly(g, [[x, 14], [x + 12, 14], [x + 12, 40], [x + 20, 44], [x + 20, 52], [x, 52]], c);
+        poly(g, [[x, 14], [x + 12, 14], [x + 12, 20], [x, 20]], shade(c, 0.3));
+      }
     },
     pelt(g, color = '#8f8f96') { poly(g, [[12, 20], [22, 12], [30, 18], [40, 10], [52, 18], [50, 34], [56, 46], [40, 50], [32, 56], [22, 48], [10, 44], [16, 32]], color); },
     gem(g, color) {
@@ -216,6 +234,11 @@ const Icons = (() => {
     else if (id === 'burnt_fish') draw.fish(g, '#2a2420', '#3a302a');
     else if (it.heal) draw.fish(g, '#c88a42', '#f0c070');
     else if (id.endsWith('_sword')) draw.sword(g, tier);
+    else if (it.slot && it.family) {
+      // Hide and metal armour by slot, in the set's colour.
+      const c = it.color != null ? '#' + it.color.toString(16).padStart(6, '0') : tier;
+      ({ head: draw.helm, body: draw.platebody, legs: draw.legs, feet: draw.boots })[it.slot](g, c);
+    }
     else if (id.endsWith('_shield')) draw.shield(g, tier);
     else if (id.endsWith('_helm')) draw.helm(g, tier);
     else if (id.endsWith('_platebody')) draw.platebody(g, tier);

@@ -116,6 +116,12 @@ monsters and bosses wind up special attacks, marked by red shapes on the ground:
 slams, the Frost Drake's and Frost Wurm's breath, the Crypt Lord's death nova and summoned
 skeletons, and the Bandit King's whirling blades. Roll out of the red, or block and take less.
 
+**Armour.** Six equipment slots: weapon, shield, head, body, legs and feet. Smith copper, iron, steel and
+starmetal helms, platebodies, platelegs, boots and shields, or craft hide and scale sets at a workbench from
+monster drops: leather (wolf pelts), lurker hide, bear fur, troll hide, and the boss sets, Drakescale and
+Wurmscale. Wearing a full matching set (head, body, legs and feet) adds a set bonus, and you can see every
+piece on your character.
+
 **Seasons, horses and pets.** Every three days the season turns: spring blossom, summer sun, autumn
 leaves and rain, winter frost and snow (when food prices rise). Buy a horse in Ironhold or
 Frosthollow and press Z to ride. A hound bites at whatever you fight, a cat finds you coins, and a

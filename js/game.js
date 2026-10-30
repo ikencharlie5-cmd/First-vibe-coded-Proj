@@ -49,7 +49,7 @@ function newState() {
   xp.hitpoints = xpForLevel(10);
   return {
     v: 4, px: HOMESTEAD.x + 0.5, py: HOMESTEAD.y + 2, face: Math.PI, camYaw: 0, hp: 10, gold: 20, xp,
-    inv: {}, equip: { weapon: null, shield: null, head: null, body: null },
+    inv: {}, equip: { weapon: null, shield: null, head: null, body: null, legs: null, feet: null },
     style: 'attack',
     markets: {}, marketTimer: 0,
     structs: [{ id: 1, type: 'campfire', x: HOMESTEAD.x, y: HOMESTEAD.y, level: 1, pending: null, work: 0, workers: 0, acc: 0, on: true, recipe: 'cook_minnow' }],
@@ -192,7 +192,14 @@ function equipStats() {
     const st = ITEMS[id].stats || {};
     s.acc += st.acc || 0; s.str += st.str || 0; s.def += st.def || 0;
   }
+  const fam = fullSet();
+  if (fam) { const b = setBonus(fam) || {}; s.acc += b.acc || 0; s.str += b.str || 0; s.def += b.def || 0; }
   return s;
+}
+// The armour family you're wearing head to toe, if any.
+function fullSet() {
+  const fams = ARMOR_SLOTS.map(sl => state.equip[sl] && ITEMS[state.equip[sl]].family);
+  return fams[0] && fams.every(f => f === fams[0]) ? fams[0] : null;
 }
 
 function equip(id) {
@@ -1551,11 +1558,12 @@ function packHtml() {
     return `<div class="slot${it.heal || it.slot || it.mount || it.pet ? ' click' : ''}${state.pet === id || (it.mount && state.mounted) ? ' active' : ''}${it.rare ? ' rare' : ''}" data-item="${id}" title="${esc(it.name + hint)}">${ico(id, '')}<span class="qty">${fmt(state.inv[id])}</span></div>`;
   }).join('')}</div>` : '<p class="dim">Your pack is empty. Gather sticks from bushes and stones from loose stones.</p>';
   html += '<h3>Equipped</h3><div class="slots equip">';
-  for (const slot of ['weapon', 'shield', 'head', 'body']) {
+  for (const slot of EQUIP_SLOTS) {
     const id = state.equip[slot];
     html += `<div class="slot${id ? ' click' : ' empty'}" data-unequip="${slot}" title="${id ? esc(itemName(id)) + ' (click to remove)' : cap(slot)}">${id ? ico(id, '') : `<span class="slot-label">${cap(slot)}</span>`}</div>`;
   }
-  html += `</div><p class="small">Accuracy +${eq.acc} | Power +${eq.str} | Armour +${eq.def}</p><h3>Tools in use</h3><div class="slots equip">`;
+  const fam = fullSet(), fb = fam && setBonus(fam);
+  html += `</div><p class="small">Accuracy +${eq.acc} | Power +${eq.str} | Armour +${eq.def}</p>${fb ? `<p class="small gold">Full set bonus: ${Object.entries(fb).map(([k, v]) => `${{ acc: 'accuracy', str: 'power', def: 'armour' }[k]} +${v}`).join(', ')}</p>` : '<p class="small dim">Wear a matching head, body, legs and feet for a set bonus.</p>'}<h3>Tools in use</h3><div class="slots equip">`;
   for (const t of ['axe', 'pickaxe', 'rod']) {
     const id = bestTool(t);
     html += `<div class="slot${id ? '' : ' empty'}" title="${id ? esc(itemName(id)) : 'No ' + t}">${id ? ico(id, '') : `<span class="slot-label">${cap(t)}</span>`}</div>`;

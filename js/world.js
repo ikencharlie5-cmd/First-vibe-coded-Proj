@@ -490,6 +490,7 @@ function hideSecrets(r) {
 // stone bridges arch up, timber ones rise gently, rope bridges sag, and piers stay flat.
 const bridges = [];
 const bridgeOf = new Int16Array(W * H).fill(-1);
+const approachOf = new Int16Array(W * H).fill(-1); // land tiles where a bridge's ramp runs down into the ground
 const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const isLand = i => WALKABLE.has(terrain[i]) && terrain[i] !== T.BRIDGE;
 function buildBridgeSpans() {
@@ -515,21 +516,44 @@ function buildBridgeSpans() {
     const centre = p => { const near = (pier && p === b ? tiles : ends).filter(c => { const [x, y] = xy(c); return Math.hypot(x - p[0], y - p[1]) < 3; }).map(xy);
       return [near.reduce((s, v) => s + v[0], 0) / near.length, near.reduce((s, v) => s + v[1], 0) / near.length]; };
     const [x0, y0] = centre(a), [x1, y1] = centre(b);
-    const bank = (x, y) => { let s = 0, n = 0; for (let yy = Math.round(y) - 2; yy <= Math.round(y) + 2; yy++) for (let xx = Math.round(x) - 2; xx <= Math.round(x) + 2; xx++) { const k = idx(xx, yy); if (isLand(k)) { s += tileH[k]; n++; } } return n ? Math.max(0.2, s / n) : 0.3; };
+    // The deck meets the bank at the bank's highest point, so it never ends in a step down.
+    const bank = (x, y) => { let hi = -Infinity; for (let yy = Math.round(y) - 2; yy <= Math.round(y) + 2; yy++) for (let xx = Math.round(x) - 2; xx <= Math.round(x) + 2; xx++) { const k = idx(xx, yy); if (isLand(k)) hi = Math.max(hi, tileH[k]); } return hi > -Infinity ? Math.max(0.2, hi + 0.05) : 0.3; };
     const len = Math.hypot(x1 - x0, y1 - y0) + 1, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
     const near = nearestTown(cx, cy), bi = biome[idx(Math.round(cx), Math.round(cy))];
     const style = pier ? 'timber' : near.dist < 45 ? 'stone' : (bi === BIOME.MARSH || bi === BIOME.ISLES || cy > coastY(cx) - 4) ? 'rope' : 'timber';
     const h0 = bank(x0, y0), h1 = pier ? h0 : bank(x1, y1);
     const rise = pier ? 0 : style === 'stone' ? Math.min(1.4, 0.3 + len * 0.07) : style === 'timber' ? Math.min(0.6, 0.15 + len * 0.03) : -Math.min(0.12 + len * 0.012, Math.min(h0, h1) - 0.12);
-    const br = { id, tiles, x0, y0, x1, y1, h0, h1, rise, style, pier, len };
+    const br = { id, tiles, x0, y0, x1, y1, h0, h1, rise, style, pier, len, approach: [] };
     bridges.push(br);
-    for (const c of tiles) { br.bed = br.bed || {}; br.bed[c] = tileH[c]; tileH[c] = bridgeDeck(br, c % W, Math.floor(c / W)); }
+    for (const c of tiles) { br.bed = br.bed || {}; br.bed[c] = tileH[c]; }
+    // Ramps: the deck carries on a couple of tiles into each bank and settles into the ground.
+    const ux = (x1 - x0) / (len - 1 || 1), uy = (y1 - y0) / (len - 1 || 1), ul = Math.hypot(ux, uy) || 1;
+    for (const c of ends) {
+      const ex = c % W, ey = Math.floor(c / W);
+      const out = Math.hypot(ex - x0, ey - y0) < Math.hypot(ex - x1, ey - y1) ? -1 : 1;
+      const cand = N4.map(([a, bb]) => [ex + a, ey + bb]);
+      for (let k = 1; k <= 3; k++) cand.push([Math.round(ex + out * ux / ul * k), Math.round(ey + out * uy / ul * k)]);
+      for (const [ax, ay] of cand) {
+        const n = idx(ax, ay);
+        if (!isLand(n) || approachOf[n] >= 0 || townBlocks.has(n) || services.has(n)) continue;
+        approachOf[n] = id; br.approach.push(n);
+      }
+    }
+    for (const c of tiles) tileH[c] = bridgeDeck(br, c % W, Math.floor(c / W));
   }
 }
 function bridgeDeck(b, px, py) {
   const dx = b.x1 - b.x0, dy = b.y1 - b.y0, l2 = dx * dx + dy * dy || 1;
   const t = clamp(((px - b.x0) * dx + (py - b.y0) * dy) / l2, 0, 1);
   return lerp(b.h0, b.h1, t) + b.rise * Math.sin(Math.PI * t);
+}
+// On a ramp, blend from the deck's end height into the real ground over about two tiles.
+function rampHeight(b, px, py, ground) {
+  const dx = b.x1 - b.x0, dy = b.y1 - b.y0, l2 = dx * dx + dy * dy || 1;
+  const t = ((px - b.x0) * dx + (py - b.y0) * dy) / l2;
+  const beyond = (t < 0 ? -t : t > 1 ? t - 1 : 0) * Math.sqrt(l2);
+  const end = t < 0.5 ? b.h0 : b.h1;
+  return lerp(end, ground, smooth(clamp((beyond - 0.3) / 2.2, 0, 1)));
 }
 
 function computeColors() {
@@ -567,6 +591,12 @@ function computeColors() {
 function groundHeight(px, py) {
   const bt = bridgeOf[idx(clamp(Math.round(px), 0, W - 1), clamp(Math.round(py), 0, H - 1))];
   if (bt >= 0) return bridgeDeck(bridges[bt], px, py);
+  const ground = terrainHeight(px, py);
+  const ap = approachOf[idx(clamp(Math.round(px), 0, W - 1), clamp(Math.round(py), 0, H - 1))];
+  return ap >= 0 ? Math.max(ground, rampHeight(bridges[ap], px, py, ground)) : ground;
+}
+// The bare terrain surface, ignoring bridges.
+function terrainHeight(px, py) {
   const u = clamp(px + 0.5, 0, W - 0.001), v = clamp(py + 0.5, 0, H - 0.001);
   const x0 = Math.floor(u), y0 = Math.floor(v), fx = u - x0, fy = v - y0;
   const k = y0 * (W + 1) + x0;

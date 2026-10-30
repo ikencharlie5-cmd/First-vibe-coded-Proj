@@ -105,11 +105,15 @@ const GEAR = [
   { id: 'shield',    name: 'shield',    slot: 'shield', bars: 2, planks: 2, off: 4, stats: t => ({ def: 8 * t }) },
   { id: 'helm',      name: 'helm',      slot: 'head',   bars: 1, planks: 0, off: 0, stats: t => ({ def: 4 * t }) },
   { id: 'platebody', name: 'platebody', slot: 'body',   bars: 3, planks: 0, off: 6, extra: { wolf_pelt: 1 }, stats: t => ({ def: 12 * t }) },
+  { id: 'platelegs', name: 'platelegs', slot: 'legs',   bars: 2, planks: 0, off: 4, stats: t => ({ def: 8 * t }) },
+  { id: 'boots',     name: 'boots',     slot: 'feet',   bars: 1, planks: 0, off: 1, stats: t => ({ def: 3 * t }) },
   { id: 'axe',       name: 'axe',       tool: 'axe',     bars: 1, planks: 1, off: 1 },
   { id: 'pickaxe',   name: 'pickaxe',   tool: 'pickaxe', bars: 1, planks: 1, off: 1 },
 ];
 
-const SLOT_SKILL = { weapon: 'attack', shield: 'defence', head: 'defence', body: 'defence' };
+const SLOT_SKILL = { weapon: 'attack', shield: 'defence', head: 'defence', body: 'defence', legs: 'defence', feet: 'defence' };
+const EQUIP_SLOTS = ['weapon', 'shield', 'head', 'body', 'legs', 'feet'];
+const ARMOR_SLOTS = ['head', 'body', 'legs', 'feet'];
 const TOOL_SKILL = { axe: 'woodcutting', pickaxe: 'mining', rod: 'fishing' };
 
 // Gatherable map nodes. Bushes and loose stones need no tool and no skill.
@@ -173,11 +177,43 @@ for (const t of TIERS) {
     for (const k in inputs) value += ITEMS[k].value * inputs[k];
     const item = { name: `${t.name} ${g.name}`, value: Math.round(value * 1.4), tier: t.tier, req: t.req };
     if (g.slot) { item.slot = g.slot; item.stats = g.stats(t.tier); }
+    if (ARMOR_SLOTS.includes(g.slot)) item.family = t.id;
     if (g.tool) item.tool = g.tool;
     if (g.id === 'sword') item.sword = true;
     ITEMS[id] = item;
     addRecipe({ id, skill: 'smithing', level: t.req + g.off, xp: t.barXp * g.bars, inputs, outputs: { [id]: 1 } });
   }
+}
+
+// Hide and scale armour, crafted at a workbench from what monsters drop. Lighter sets favour accuracy,
+// boss sets are the toughest in the game. Wearing all four pieces of one set adds its set bonus.
+const ARMOR_SETS = [
+  { id: 'leather', name: 'Leather',     hide: 'wolf_pelt',   craft: 6,  req: 1,  tier: 1.5, color: 0x8a5a32, bonus: { acc: 8 },          pieces: ['cap', 'jerkin', 'chaps', 'boots'] },
+  { id: 'lurker',  name: 'Lurker-hide', hide: 'lurker_hide', craft: 20, req: 15, tier: 2.5, color: 0x5a6a42, bonus: { acc: 12 },         pieces: ['hood', 'vest', 'leggings', 'boots'] },
+  { id: 'bearfur', name: 'Bear-fur',    hide: 'bear_pelt',   craft: 28, req: 22, tier: 3,   color: 0xe4e8ea, bonus: { def: 12 },         pieces: ['hat', 'coat', 'leggings', 'boots'] },
+  { id: 'troll',   name: 'Troll-hide',  hide: 'troll_hide',  craft: 34, req: 28, tier: 3.5, color: 0x6a7a6a, bonus: { str: 10 },         pieces: ['helm', 'armour', 'leggings', 'boots'] },
+  { id: 'drake',   name: 'Drakescale',  hide: 'drake_scale', craft: 40, req: 34, tier: 4.5, color: 0x9ad0ec, bonus: { def: 18 },         pieces: ['helm', 'mail', 'greaves', 'boots'], extra: 'steel_bar' },
+  { id: 'wurm',    name: 'Wurmscale',   hide: 'wurm_scale',  craft: 46, req: 40, tier: 5.5, color: 0xe2f4ff, bonus: { def: 22, str: 12 }, pieces: ['crown', 'plate', 'greaves', 'boots'], extra: 'starmetal_bar' },
+];
+const ARMOR_PIECE = { head: { n: 1, def: 4 }, body: { n: 3, def: 12 }, legs: { n: 2, def: 8 }, feet: { n: 1, def: 3 } };
+for (const set of ARMOR_SETS) {
+  ARMOR_SLOTS.forEach((slot, k) => {
+    const id = `${set.id}_${set.pieces[k]}`, pc = ARMOR_PIECE[slot];
+    const inputs = { [set.hide]: pc.n };
+    if (set.extra) inputs[set.extra] = pc.n;
+    let value = 0;
+    for (const i in inputs) value += ITEMS[i].value * inputs[i];
+    ITEMS[id] = { name: `${set.name} ${set.pieces[k]}`, value: Math.round(value * 1.5), slot, tier: Math.round(set.tier), req: set.req,
+      stats: { def: Math.round(pc.def * set.tier) }, family: set.id, color: set.color };
+    addRecipe({ id, skill: 'crafting', level: set.craft + k, xp: 30 * set.tier * pc.n, inputs, outputs: { [id]: 1 } });
+  });
+}
+// Bonus for wearing a whole set: hide sets have their own; metal sets add defence by tier.
+function setBonus(family) {
+  const hide = ARMOR_SETS.find(s => s.id === family);
+  if (hide) return hide.bonus;
+  const metal = TIERS.find(t => t.id === family);
+  return metal ? { def: 5 * metal.tier } : null;
 }
 
 // Price category for each item, used by town markets.
@@ -293,7 +329,7 @@ const TOWNS = {
                sells: ['raw_trout', 'raw_pike', 'trout', 'pike', 'fishing_rod', 'sailboat', 'pet_cat'] },
   thornwood: { name: 'Thornwood',  kind: 'forest',   desc: 'A lodge deep in the western forest. Rich in timber, short of metal.',
                buy: { bars: 1.4, gear: 1.3, food: 1.3, ore: 1.2, logs: 0.6, planks: 0.8 }, markup: 1.2,
-               sells: ['pine_log', 'oak_log', 'ironwood_log', 'pine_plank', 'oak_plank', 'pet_dog'] },
+               sells: ['pine_log', 'oak_log', 'ironwood_log', 'pine_plank', 'oak_plank', 'pet_dog', 'leather_cap', 'leather_boots'] },
   ratsnest:  { name: "Rat's Nest", kind: 'black',    desc: 'A bandit black market in the badlands. Pays a fortune for rare goods, no questions asked.',
                buy: { rare: 1.9, gear: 1.2, default: 0.75 }, markup: 2.2,
                sells: ['star_fragment', 'wolf_pelt', 'rough_gem', 'steel_bar'] },
