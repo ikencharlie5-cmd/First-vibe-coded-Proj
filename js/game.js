@@ -60,7 +60,7 @@ function newState() {
     discovered: { ironhold: true },
     stats: { kills: 0, earned: 0 },
     savedAt: Date.now(), seenHelp: false,
-    story: { step: 0, winter: 0, side: 0, choice: null, forgeLit: false, journal: [] },
+    story: { winter: 0, side: 0, choice: null, forgeLit: false, journal: [], quests: {}, tracked: null, seeds: {}, dug: {}, runes: {}, solved: {}, upg: { stamina: 0, pack: 0 } },
     sailing: false,
     caravans: [], myTown: null,
     mounted: false, pet: null, ach: {}, bestiary: {}, seen: {},
@@ -109,7 +109,6 @@ function addXp(skill, amount) {
   state.xp[skill] += amount;
   const after = lvl(skill);
   if (after > before) {
-    log(`Level up! ${skillName(skill)} is now level ${after}.`, 'level');
     FX.gain(state.px, state.py, `${skillName(skill)} ${after}!`, 'level');
     toast(`${skillName(skill)} level ${after}!`, 'level');
     Sound.sfx('levelup');
@@ -123,7 +122,7 @@ function combatLevel() {
 }
 
 const have = id => state.inv[id] || 0;
-function addItem(id, n = 1) { state.inv[id] = have(id) + n; uiDirty = true; }
+function addItem(id, n = 1, quiet = false) { state.inv[id] = have(id) + n; uiDirty = true; if (!quiet && n > 0) lootChip(id, n); }
 function removeItem(id, n = 1) {
   state.inv[id] = have(id) - n;
   if (state.inv[id] <= 0) delete state.inv[id];
@@ -132,7 +131,7 @@ function removeItem(id, n = 1) {
 function packCap() {
   let bonus = 0;
   for (const id in state.inv) if (ITEMS[id] && ITEMS[id].pack) bonus = Math.max(bonus, ITEMS[id].pack);
-  return EMPIRE.packBase + bonus;
+  return EMPIRE.packBase + bonus + 10 * ((state.story.upg || {}).pack || 0);
 }
 const packUsed = () => Object.values(state.inv).reduce((a, b) => a + b, 0);
 const packFree = () => Math.max(0, packCap() - packUsed());
@@ -202,7 +201,7 @@ function equip(id) {
   const sk = SLOT_SKILL[it.slot];
   if (lvl(sk) < it.req) { log(`You need ${skillName(sk)} level ${it.req} to use the ${it.name}.`, 'warn'); return; }
   const old = state.equip[it.slot];
-  if (old) addItem(old);
+  if (old) addItem(old, 1, true);
   removeItem(id);
   state.equip[it.slot] = id;
   log(`You equip the ${it.name}.`);
@@ -233,10 +232,45 @@ function eat(id) {
   log(`You eat the ${ITEMS[id].name}. (+${ITEMS[id].heal} HP)`, 'good');
 }
 
+// Messages: big moments get a banner (with the story text underneath), everything else a short hint above the hotbar.
+let pendingSub = null, lastBanner = null;
 function log(text, cls = '') {
   messages.push({ text, cls, t: Date.now() });
   if (messages.length > 60) messages.shift();
-  uiDirty = true;
+  if (typeof document === 'undefined' || !$('hints')) return;
+  if (cls === 'level') {
+    if (lastBanner && Date.now() - lastBanner.at < 80 && !lastBanner.hasSub) { bannerSub(lastBanner, text); return; }
+    pendingSub = text;
+    setTimeout(() => { if (pendingSub === text) { pendingSub = null; hint(text, 'level'); } }, 0);
+    return;
+  }
+  hint(text, cls);
+}
+function hint(text, cls = '') {
+  const box = $('hints');
+  for (const el of [...box.children]) if (el.textContent === text) el.remove();
+  const el = document.createElement('div');
+  el.className = `hint ${cls}`;
+  el.textContent = text;
+  box.appendChild(el);
+  while (box.children.length > 3) box.firstChild.remove();
+  const life = Math.min(6500, 2400 + text.length * 30);
+  setTimeout(() => el.classList.add('out'), life);
+  setTimeout(() => el.remove(), life + 600);
+}
+function bannerSub(el, text) { el.hasSub = true; el.insertAdjacentHTML('beforeend', `<div class="t-sub">${esc(text)}</div>`); }
+// Items you pick up pop up as little icons, merging repeats.
+function lootChip(id, n) {
+  const box = $('loot');
+  if (!box || !ITEMS[id]) return;
+  let el = [...box.children].find(c => c.dataset.id === id && !c.classList.contains('out'));
+  if (el) { el.dataset.n = +el.dataset.n + n; clearTimeout(el.t1); clearTimeout(el.t2); el.classList.remove('pop'); void el.offsetWidth; }
+  else { el = document.createElement('div'); el.className = 'chip'; el.dataset.id = id; el.dataset.n = n; box.appendChild(el); }
+  el.innerHTML = `${ico(id, 'ico')}<b>+${fmt(+el.dataset.n)}</b> ${esc(itemName(id))}`;
+  el.classList.add('pop');
+  while (box.children.length > 5) box.firstChild.remove();
+  el.t1 = setTimeout(() => el.classList.add('out'), 2600);
+  el.t2 = setTimeout(() => el.remove(), 3200);
 }
 
 // ---------------------------------------------------------------- structures
@@ -388,7 +422,6 @@ function processConstruct(now) {
     s.level = s.pending;
     s.pending = null;
     s.work = 0;
-    log(s.level === 1 ? `You finished building the ${structDef(s).name}!` : `${structDef(s).name} upgraded to level ${s.level}!`, 'level');
     FX.gain(state.px, state.py, 'Built!', 'level');
     Sound.sfx('built');
     toast(s.level === 1 ? `${structDef(s).name} built` : `${structDef(s).name} upgraded`, 'good');
@@ -482,7 +515,7 @@ function structAction(act, s, arg) {
       const [id, nStr] = arg.split(':');
       const n = Math.min(+nStr, state.store[id] || 0, packFree());
       if (n <= 0) { log(packFree() ? 'Nothing to take.' : 'Your pack is full.', 'warn'); return; }
-      takeStore(id, n); addItem(id, n);
+      takeStore(id, n); addItem(id, n, true);
       break;
     }
   }
@@ -506,7 +539,7 @@ function depositAll() {
 const nodeActive = (n, now) => !!n && n.until <= now;
 const SOLID_RES = new Set(['pine', 'oak', 'ironwood', 'copper', 'iron', 'coal', 'starrock']);
 // Afloat you can only go where the water is open; on foot, frozen lakes count as ground.
-const sailable = (x, y) => x >= 0 && y >= 0 && x < W && y < H && (terrain[idx(x, y)] === T.WATER || terrain[idx(x, y)] === T.BRIDGE) && !iceAt(x, y);
+const sailable = (x, y) => x >= 0 && y >= 0 && x < W && y < H && terrain[idx(x, y)] === T.WATER && !iceAt(x, y);
 function solidTile(x, y, now) {
   if (state.sailing) return !sailable(x, y) || structIndex.has(idx(x, y));
   if (!walkableTerrain(x, y) && !iceAt(x, y)) return true;
@@ -559,6 +592,9 @@ function describeTarget(t) {
     if (t.svc.type === 'carriage') return 'Hire a carriage';
     if (t.svc.type === 'chest') return state.opened[t.svc.poi] ? 'Search the empty chest' : t.svc.poi.endsWith('_hoard') ? 'Open the hoard' : 'Open the old chest';
     if (t.svc.type === 'portal') return t.svc.label;
+    if (t.svc.type === 'board') return 'Read the notice board';
+    if (t.svc.type === 'dig') return state.story.dug[t.svc.id] ? 'A dug-up cairn' : 'Dig beneath the old cairn';
+    if (t.svc.type === 'rune') { const r = (state.story.runes[t.svc.poi] || {})[t.svc.dir] || 'Sun'; return `Turn the rune stone (shows the ${r})`; }
     if (t.svc.type === 'npc') return Story.npcHere(t.svc.npc) ? `Talk to ${NPC_NAMES[t.svc.npc]}` : 'Look at the empty throne';
     if (t.svc.type === 'forge') return state.story.forgeLit ? 'Look at the Firstforge' : 'Use the Firstforge';
     return 'Pray at the shrine';
@@ -623,6 +659,9 @@ function interact(t) {
     if (t.svc.type === 'chest') openChest(t.svc.poi);
     else if (t.svc.type === 'npc') openPanel('talk', { npc: t.svc.npc });
     else if (t.svc.type === 'forge') Story.useForge();
+    else if (t.svc.type === 'board') openPanel('board', { town: t.svc.town });
+    else if (t.svc.type === 'dig') Story.dig(t.svc);
+    else if (t.svc.type === 'rune') Story.turnRune(t.svc);
     else if (t.svc.type === 'portal') {
       state.px = t.svc.to.x; state.py = t.svc.to.y;
       action = null;
@@ -686,9 +725,8 @@ function processGather(now) {
     if (r.skill === 'fishing') Sound.sfx('splash');
     else if (!r.skill) Sound.sfx('pick');
     addItem(r.item);
-    FX.gain(state.px, state.py, `+1 ${itemName(r.item)}`);
     if (r.skill) addXp(r.skill, r.xp);
-    if (r.stone && Math.random() < r.stone && packFree()) { addItem('stone'); FX.gain(state.px, state.py, '+1 Stone'); }
+    if (r.stone && Math.random() < r.stone && packFree()) addItem('stone');
     if (Math.random() < r.deplete) {
       n.until = now + r.respawn * 1000;
       action = null;
@@ -941,12 +979,12 @@ function pray(poi) {
   Sound.sfx('shrine');
   log('A warm light washes over you. Your wounds are healed.', 'good');
   FX.gain(state.px, state.py, 'Healed', 'level');
+  Story.atShrine(poi);
 }
 function scanPois() {
   for (const p of pois) {
     if (state.pois[p.id] || Math.hypot(p.x - state.px, p.y - state.py) > 8) continue;
     state.pois[p.id] = true;
-    log(`You discovered ${/^the /i.test(p.name) ? '' : 'the '}${p.name}.`, 'level');
     toast(`Discovered: ${p.name}`, 'level');
     Sound.sfx('discover');
   }
@@ -1275,7 +1313,7 @@ function update() {
   const town = townAt(Math.round(state.px), Math.round(state.py), 2);
   if (town && !state.discovered[town]) {
     state.discovered[town] = true;
-    log(`You discovered ${TOWNS[town].name}! ${TOWNS[town].desc}`, 'level');
+    log(TOWNS[town].desc, 'level');
     toast(`Discovered: ${TOWNS[town].name}`, 'level');
     Sound.sfx('discover');
   }
@@ -1288,7 +1326,7 @@ function update() {
 
   if (now - lastSave > 15000) save();
   renderHud();
-  if (uiDirty) { renderPanel(); renderLog(); uiDirty = false; }
+  if (uiDirty) { renderPanel(); uiDirty = false; }
 }
 
 // Movement runs every animation frame so walking is smooth, in small steps so slow frames don't tunnel through walls.
@@ -1323,14 +1361,15 @@ function renderHud() {
         ${wagesPerMin() ? `<span title="Wages per minute">${Icons.ui('people')}${wagesPerMin()}g/min${state.unpaid ? ' <b class="bad">UNPAID</b>' : ''}</span>` : ''}
       </div>`;
   }
+  // Only the quest you chose to track shows here.
   const q = Story.current();
-  const qKey = q.main.title + q.main.progress + (q.side ? q.side.title : '');
+  const qKey = q ? q.title + q.goal + q.progress : '';
   if ($('quest-track').dataset.key !== qKey) {
     $('quest-track').dataset.key = qKey;
-    $('quest-track').innerHTML = `<b>${esc(q.main.title)}</b>${q.main.progress ? ` <span class="dim small">(${esc(q.main.progress)})</span>` : ''}` +
-      `${q.side ? `<div class="side small">Side: ${esc(q.side.title)}</div>` : ''}`;
+    $('quest-track').classList.toggle('hidden', !q);
+    $('quest-track').innerHTML = q ? `<b>${esc(q.title)}</b>${q.progress ? ` <span class="dim small">(${esc(q.progress)})</span>` : ''}<div class="small">${esc(q.goal)}</div>` : '';
   }
-  const stamPct = Math.round(combat.stamina);
+  const stamPct = Math.round(combat.stamina / staminaMax() * 100);
   if ($('hud-stam').dataset.v !== String(stamPct)) { $('hud-stam').dataset.v = stamPct; $('hud-stam').innerHTML = `<div class="bar stam" title="Stamina: dodge, block and specials use it"><div style="width:${stamPct}%"></div></div>`; }
   $('zone').textContent = state.myTown && myTownAt(state.px, state.py) ? state.myTown.name : regionName(state.px, state.py);
   const w = state.weather.kind;
@@ -1370,14 +1409,18 @@ function renderHud() {
 function toast(text, kind = '') {
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
-  el.textContent = text;
+  el.innerHTML = `<div class="t-title">${esc(text)}</div>`;
+  el.at = Date.now();
+  if (pendingSub) { bannerSub(el, pendingSub); pendingSub = null; }
   $('toasts').appendChild(el);
-  setTimeout(() => el.classList.add('out'), 2600);
-  setTimeout(() => el.remove(), 3200);
-}
-
-function renderLog() {
-  $('log').innerHTML = messages.slice(-6).map(m => `<div class="${m.cls}">${esc(m.text)}</div>`).join('');
+  lastBanner = el;
+  while ($('toasts').children.length > 2) $('toasts').firstChild.remove();
+  // Give banners with story text long enough to read.
+  setTimeout(() => {
+    const life = el.hasSub ? 5200 : 2800;
+    setTimeout(() => el.classList.add('out'), life);
+    setTimeout(() => el.remove(), life + 700);
+  }, 0);
 }
 
 // Minimap: a pre-rendered image of the whole map, rotated with the camera.
@@ -1477,12 +1520,12 @@ function closePanel() { panel = null; $('panel').classList.add('hidden'); }
 function togglePanel(kind) { if (panel && panel.kind === kind) closePanel(); else openPanel(kind); }
 
 const PANEL_ICONS = { pack: 'bag', skills: 'star', craft: 'anvil', build: 'hammer', struct: 'house', market: 'coin', carriage: 'wheel',
-  empire: 'castle', help: 'book', offline: 'sun', map: 'map', settings: 'gear', quests: 'scroll', talk: 'people', records: 'trophy' };
+  empire: 'castle', help: 'book', offline: 'sun', map: 'map', settings: 'gear', quests: 'scroll', talk: 'people', records: 'trophy', board: 'scroll', offering: 'star' };
 const PANEL_VIEWS = {
   pack: () => packHtml(), skills: () => skillsHtml(), craft: d => craftHtml(d), build: () => buildHtml(), struct: d => structHtml(d),
   market: d => marketHtml(d), carriage: d => carriageHtml(d), empire: () => empireHtml(), help: () => helpHtml(),
   offline: d => offlineHtml(d), map: () => mapHtml(), settings: () => settingsHtml(),
-  quests: () => Story.questsHtml(), talk: d => Story.talkHtml(d), charter: () => charterHtml(), records: () => recordsHtml(),
+  quests: () => Story.questsHtml(), talk: d => Story.talkHtml(d), board: d => Story.boardHtml(d), offering: () => Story.offeringHtml(), charter: () => charterHtml(), records: () => recordsHtml(),
 };
 function renderPanel() {
   if (!panel) return;
@@ -1758,9 +1801,12 @@ function helpHtml() {
     <li>Sell goods in towns. Each town pays more for different things: timber in the mountain town, metal at the forest lodge, rare loot at the black market.</li>
     <li>Bandits raid camps and storehouses. Smith swords and build <b>Guard Towers</b>.</li>
   </ol>
-  <h3>The Long Winter</h3>
-  <p>The winters are growing longer. Your current quest is shown under your stats, and a gold star on the map marks where to go next. Press <kbd>J</kbd> for the quest log and journal.
-  As the story moves on, the world changes with it.</p>
+  <h3>Quests and secrets</h3>
+  <p>There is no set path. Read the <b>notice boards</b> on every town square for work and rumours, and talk to people with a <b>!</b> over their heads.
+  The Royal Herald in Ironhold knows of trouble in the north, if you want it: the Long Winter can be tackled in any order, or not at all.
+  New quests aren't tracked until you choose: press <kbd>J</kbd> and click <b>Track</b> to show one under your stats and as a gold star on the map.</p>
+  <p>The world hides <b>star seeds</b> on peaks, islands and lonely corners (offer five at any shrine for more stamina or pack space),
+  <b>cairns</b> with buried treasure (bring a pickaxe), and <b>stone circles</b> whose altars hold riddles: turn the rune stones to answer them.</p>
   <h3>Caravans and your own town</h3>
   <p>Build a <b>Trading Post</b> to send wagon caravans along the roads: they sell goods from your storehouse in any town you've visited and can bring back what you choose. Hire caravan guards against ambushes.
   Once you have 6 townsfolk and 8 buildings, build a <b>Town Hall</b> and name your town: it gets its own market, a carriage stop and tax income, and settlers move in. Ring it with <b>Walls</b> and <b>Gates</b> to help your guards hold off raids.</p>
@@ -1836,6 +1882,9 @@ function onPanelClick(e) {
   const d = b.dataset, town = panel.data.town;
   if (d.close) closePanel();
   else if (d.talk) Story.choose(d.talk);
+  else if (d.board) Story.boardAction(d.board, d.q);
+  else if (d.track) Story.track(d.track);
+  else if (d.offer) Story.offer(d.offer);
   else if (d.found) foundTown($('town-name').value);
   else if (d.craft) startCraft(d.craft, +d.n, panel.data.sid);
   else if (d.build) startBuildMode(d.build);
@@ -1876,6 +1925,7 @@ function init() {
   const loaded = load();
   if (!loaded) state = newState();
   defineMyTown();
+  Story.init();
   marketInit();
   indexStructs();
   // Nothing grows through your buildings.

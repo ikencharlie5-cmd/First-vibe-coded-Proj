@@ -39,7 +39,7 @@ const Render3D = (() => {
   const carriers = new Map(); // settlement workers walking to the storehouse
   const poiObjs = [];
   let windowMat, waterMesh, groundGeo, baseCol, iceMesh = null;
-  const npcObjs = [];
+  const npcObjs = [], boardObjs = [], runeObjs = [], seedObjs = [], cairnObjs = [];
   let forgeFx = null;
   const STREAM_R = 64;
   const TIER_COLORS = [0x8a8a8a, 0xc77a3a, 0x9c9c9c, 0xd2dae4, 0x8f7bff];
@@ -170,12 +170,10 @@ const Render3D = (() => {
     waterMesh = water;
     scene.add(water);
 
-    // Town walls, bridges and gate torches.
-    const walls = [], bridges = [];
+    // Town walls and gate towers.
+    const walls = [];
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const t = terrain[idx(x, y)];
-      if (t === T.WALL && townAt(x, y) === 'ironhold') walls.push([x, y]);
-      if (t === T.BRIDGE) bridges.push([x, y]);
+      if (terrain[idx(x, y)] === T.WALL && townAt(x, y) === 'ironhold') walls.push([x, y]);
     }
     const wall = new C.InstancedMesh(geo('BoxGeometry', 1, 2.8, 1), mat(0x9a948a), walls.length);
     const cren = new C.InstancedMesh(geo('BoxGeometry', 0.5, 0.45, 1.1), mat(0x8a847a), walls.length);
@@ -191,19 +189,104 @@ const Render3D = (() => {
       const h = tileH[idx(x, y)];
       scene.add(cyl(1.3, 1.45, 4.4, 0x8a8478, x, h + 2.2, y, 10), cyl(1.5, 1.5, 0.4, 0x7a746a, x, h + 4.5, y, 10), cone(1.6, 2.0, 0x7a3530, x, h + 5.7, y, 10));
     }
-    const plank = new C.InstancedMesh(geo('BoxGeometry', 1.0, 0.12, 1.0), mat(0x8a6338), bridges.length);
-    const rail = new C.InstancedMesh(geo('BoxGeometry', 0.1, 0.35, 1.0), mat(0x6b4a2b), bridges.length * 2);
-    bridges.forEach(([x, y], k) => {
-      plank.setMatrixAt(k, new C.Matrix4().makeTranslation(x, 0.1, y));
-      const horiz = terrain[idx(x - 1, y)] === T.BRIDGE || terrain[idx(x + 1, y)] === T.BRIDGE;
-      for (const s of [-1, 1]) {
-        const m = new C.Matrix4().makeTranslation(horiz ? x : x + s * 0.48, 0.3, horiz ? y + s * 0.48 : y);
-        if (horiz) m.multiply(new C.Matrix4().makeRotationY(Math.PI / 2));
-        rail.setMatrixAt(k * 2 + (s > 0 ? 1 : 0), m);
+    for (const b of bridges) scene.add(bake(bridgeModel(b)));
+  }
+
+  // ------------------------------------------------------------ bridges
+  // The deck is one smooth surface following the bridge's height; railings run along every edge over water.
+  const BRIDGE_STYLE = {
+    stone:  { deck: [0xb0a898, 0x9e968a], side: 0x8a847a, thick: 0.55, rail: 0x9a948a, cap: 0xc4bcae },
+    timber: { deck: [0x9a7040, 0x84602e], side: 0x5a3a20, thick: 0.18, rail: 0x6b4a2b, cap: 0x7a5432 },
+    rope:   { deck: [0xa88a58, 0x8a6e40], side: 0x6a5030, thick: 0.1, rail: 0x6b4a2b, cap: 0xc8b088 },
+  };
+  function bridgeModel(b) {
+    const g = new C.Group(), st = BRIDGE_STYLE[b.style];
+    const top = [], col = [], sides = [];
+    const H_ = (x, y) => bridgeDeck(b, x, y);
+    const tri = (arr, ...pts) => { for (const p of pts) arr.push(p[0], p[1], p[2]); };
+    const shade = new C.Color();
+    const inBridge = (x, y) => bridgeOf[idx(x, y)] === b.id;
+    const pillarEvery = b.style === 'stone' ? 4 : b.style === 'timber' ? 2 : 0;
+    const dx = b.x1 - b.x0, dy = b.y1 - b.y0, l2 = dx * dx + dy * dy || 1;
+    const along = (x, y) => clamp(((x - b.x0) * dx + (y - b.y0) * dy) / l2, 0, 1) * b.len;
+    for (const c of b.tiles) {
+      const x = c % W, y = (c - x) / W;
+      const cs = [[x - 0.5, y - 0.5], [x + 0.5, y - 0.5], [x + 0.5, y + 0.5], [x - 0.5, y + 0.5]].map(([px, py]) => [px, H_(px, py), py]);
+      // Planks: alternating shades across the walking direction, with gaps on rope bridges.
+      const k = Math.floor(along(x, y));
+      if (b.style === 'rope' && (k + x + y) % 5 === 0) {
+        // a missing plank
+      } else {
+        tri(top, cs[0], cs[3], cs[1], cs[1], cs[3], cs[2]);
+        shade.setHex(st.deck[k % 2]).offsetHSL(0, 0, (rnd(c, 3) - 0.5) * 0.04);
+        for (let n = 0; n < 6; n++) col.push(shade.r, shade.g, shade.b);
       }
-    });
-    plank.castShadow = true;
-    scene.add(plank, rail);
+      // Thick sides and railings along each edge that isn't bridge or a bank.
+      const edges = [[1, 0, cs[1], cs[2]], [-1, 0, cs[3], cs[0]], [0, 1, cs[2], cs[3]], [0, -1, cs[0], cs[1]]];
+      for (const [ex, ey, A, B] of edges) {
+        const n = idx(x + ex, y + ey);
+        if (inBridge(x + ex, y + ey) || (WALKABLE.has(terrain[n]) && terrain[n] !== T.BRIDGE)) continue;
+        const A2 = [A[0], A[1] - st.thick, A[2]], B2 = [B[0], B[1] - st.thick, B[2]];
+        tri(sides, A, B, B2, A, B2, A2);
+        railing(g, b.style, st, A, B, rnd(c, ex * 3 + ey + 5));
+      }
+      // Pillars or posts down into the water at intervals.
+      const bed = Math.min(-0.4, (b.bed && b.bed[c]) != null ? b.bed[c] : -0.6) - 0.3, dh = H_(x, y);
+      if (pillarEvery && !b.pier && k % pillarEvery === 0 && k > 0 && k < b.len - 1 && rnd(c, 9) < (b.style === 'stone' ? 0.45 : 0.35)) {
+        const ph = dh - st.thick - bed;
+        if (b.style === 'stone') { g.add(box(0.9, ph, 0.9, st.side, x, bed + ph / 2, y)); g.add(cone(0.5, 0.5, st.side, x, bed + 0.4, y, 4)); }
+        else { g.add(cyl(0.11, 0.13, ph, 0x4a3018, x, bed + ph / 2, y, 6)); const br = box(0.06, ph * 0.9, 0.06, 0x4a3018, x, bed + ph / 2, y); br.rotation.z = 0.5; g.add(br); }
+      }
+      if (b.pier && rnd(c, 4) < 0.5) g.add(cyl(0.1, 0.12, dh - bed, 0x4a3018, x + 0.4, bed + (dh - bed) / 2, y + 0.4, 6));
+    }
+    const tg = new C.BufferGeometry();
+    tg.setAttribute('position', new C.Float32BufferAttribute(top, 3));
+    tg.setAttribute('color', new C.Float32BufferAttribute(col, 3));
+    tg.computeVertexNormals();
+    const deck = new C.Mesh(tg, new C.MeshPhongMaterial({ vertexColors: true, flatShading: true, shininess: 0, side: C.DoubleSide }));
+    deck.position.y = 0.02;
+    deck.receiveShadow = deck.castShadow = true;
+    deck.userData.noBake = true;
+    const sg = new C.BufferGeometry();
+    sg.setAttribute('position', new C.Float32BufferAttribute(sides, 3));
+    sg.computeVertexNormals();
+    const side = new C.Mesh(sg, new C.MeshPhongMaterial({ color: st.side, flatShading: true, shininess: 0, side: C.DoubleSide }));
+    side.userData.noBake = true;
+    side.castShadow = true;
+    g.add(deck, side);
+    // Lamps or tall posts mark each end.
+    for (const [ex, ey] of [[b.x0, b.y0], [b.x1, b.y1]]) {
+      if (b.pier && ex === b.x1) continue;
+      const nx = -(b.y1 - b.y0), ny = b.x1 - b.x0, nl = Math.hypot(nx, ny) || 1, half = 1.6;
+      for (const sgn of [-1, 1]) {
+        const px = ex + nx / nl * half * sgn, py = ey + ny / nl * half * sgn, ph = H_(px, py);
+        if (b.style === 'stone') {
+          g.add(box(0.45, 1.4, 0.45, st.side, px, ph + 0.7, py), box(0.55, 0.12, 0.55, st.cap, px, ph + 1.45, py));
+          g.add(mesh(geo('BoxGeometry', 0.2, 0.25, 0.2), windowMat, px, ph + 1.65, py, false));
+          const gl = glowSprite(0xffc870, 2.2); gl.position.set(px, ph + 1.65, py); g.add(gl);
+        } else if (b.style === 'rope') g.add(cyl(0.1, 0.12, 2.0, 0x5a3a20, px, ph + 0.9, py, 6), cone(0.12, 0.2, 0x5a3a20, px, ph + 2.0, py, 6));
+        else g.add(cyl(0.1, 0.12, 1.3, 0x5a3a20, px, ph + 0.6, py, 6));
+      }
+    }
+    return g;
+  }
+  // One railing segment from corner A to corner B of a deck tile.
+  function railing(g, style, st, A, B, r) {
+    const mx = (A[0] + B[0]) / 2, mz = (A[2] + B[2]) / 2, my = (A[1] + B[1]) / 2;
+    const len = Math.hypot(B[0] - A[0], B[2] - A[2]), yaw = Math.atan2(B[0] - A[0], B[2] - A[2]), tilt = Math.atan2(B[1] - A[1], len);
+    const seg = (w, h, d, color, y) => { const m = box(w, h, d, color, mx, my + y, mz); m.rotation.order = 'YXZ'; m.rotation.y = yaw; m.rotation.x = -tilt; g.add(m); return m; };
+    if (style === 'stone') {
+      seg(0.28, 0.6, len + 0.02, st.rail, 0.3);
+      seg(0.36, 0.1, len + 0.04, st.cap, 0.64);
+    } else if (style === 'timber') {
+      g.add(box(0.11, 0.85, 0.11, st.rail, A[0], A[1] + 0.42, A[2]));
+      seg(0.08, 0.08, len + 0.05, st.cap, 0.8);
+      seg(0.06, 0.06, len + 0.05, st.cap, 0.45);
+    } else {
+      if (r < 0.5) g.add(box(0.07, 0.95, 0.07, st.rail, A[0], A[1] + 0.47, A[2]));
+      seg(0.035, 0.035, len + 0.05, st.cap, 0.85);
+      seg(0.03, 0.03, len + 0.05, st.cap, 0.5);
+    }
   }
 
   function waterTexture() {
@@ -1210,6 +1293,21 @@ const Render3D = (() => {
       scene.add(bake(tg));
     }
     for (const [i, svc] of services) {
+      if (svc.type === 'board') {
+        const x = i % W, y = (i - x) / W, g = new C.Group();
+        PROP_MODELS.board(g);
+        g.position.set(x, tileH[i], y);
+        g.rotation.y = Math.atan2(TOWN_DEFS[svc.town].pc.x - x, TOWN_DEFS[svc.town].pc.y - y);
+        const name = makeLabel('Notice Board', { color: '#ffe9a8', h: 0.28 });
+        name.position.y = 2.3;
+        const marks = { '!': makeLabel('!', { color: '#ffd84a', size: 64, h: 0.6 }), '?': makeLabel('?', { color: '#c8c8c8', size: 64, h: 0.6 }) };
+        for (const m of Object.values(marks)) { m.position.y = 2.8; m.visible = false; g.add(m); }
+        g.add(name);
+        g.traverse(o => { o.userData.tile = i; });
+        scene.add(g); pickables.push(g);
+        boardObjs.push({ town: svc.town, marks });
+        continue;
+      }
       if (svc.type === 'npc') {
         const x = i % W, y = (i - x) / W, a = npcModel(svc.npc);
         a.g.position.set(x, tileH[i], y);
@@ -1268,6 +1366,7 @@ const Render3D = (() => {
     buildTownLife();
     buildPois();
     buildDungeons();
+    buildSecrets();
     buildSigns();
   }
 
@@ -1618,6 +1717,49 @@ const Render3D = (() => {
     return g;
   }
 
+  // Star seeds glow in hidden places; cairns mark buried treasure.
+  function buildSecrets() {
+    starSeeds.forEach((sd, k) => {
+      const g = new C.Group();
+      const star = mesh(geo('OctahedronGeometry', 0.22, 0), mat(0xffe27a, { emissive: 0xffc030, emissiveIntensity: 0.9 }), 0, 0, 0, false);
+      g.add(star);
+      const gl = glowSprite(0xffd060, 1.8, false); g.add(gl);
+      g.position.set(sd.x, tileH[idx(sd.x, sd.y)] + 0.9, sd.y);
+      scene.add(g);
+      seedObjs.push({ k, g, star, base: g.position.y });
+    });
+    cairns.forEach(c => {
+      const i = idx(c.x, c.y), svc = services.get(i), g = new C.Group(), pile = new C.Group(), hole = new C.Group();
+      for (const [x, y, z, r] of [[0, 0.18, 0, 0.32], [0.22, 0.12, 0.15, 0.2], [-0.2, 0.12, 0.12, 0.2], [0.04, 0.48, 0.02, 0.2], [0, 0.7, 0, 0.12]]) pile.add(mesh(geo('DodecahedronGeometry', r, 0), mat(0x8a857c), x, y, z));
+      pile.add(box(0.06, 0.6, 0.06, 0x6b4a2b, 0.35, 0.3, -0.25), box(0.3, 0.2, 0.04, 0xa02a2a, 0.45, 0.55, -0.25));
+      hole.add(mesh(geo('CylinderGeometry', 0.42, 0.36, 0.06, 10), mat(0x2a1e14), 0, 0.03, 0), mesh(geo('DodecahedronGeometry', 0.22, 0), mat(0x6a5a44), 0.55, 0.1, 0.2));
+      g.add(pile, hole);
+      g.position.set(c.x, tileH[i], c.y);
+      g.traverse(o => { o.userData.tile = i; });
+      scene.add(g); pickables.push(g);
+      cairnObjs.push({ id: svc.id, pile, hole });
+    });
+  }
+  function updateSecrets(t) {
+    const st = state.story;
+    for (const o of seedObjs) {
+      o.g.visible = !st.seeds[o.k] && Math.abs(o.g.position.x - player.vx) < 80 && Math.abs(o.g.position.z - player.vz) < 80;
+      if (!o.g.visible) continue;
+      o.star.rotation.y = t * 1.5;
+      o.g.position.y = o.base + Math.sin(t * 2 + o.k) * 0.12;
+    }
+    for (const o of cairnObjs) { const dug = !!st.dug[o.id]; o.pile.visible = !dug; o.hole.visible = dug; }
+    for (const r of runeObjs) {
+      const solved = !!st.solved[r.svc.poi], sym = ((st.runes[r.svc.poi] || {})[r.svc.dir] || 'Sun') + (solved ? '*' : '');
+      if (sym === r.sym) continue;
+      r.sym = sym;
+      if (r.label) { r.sg.remove(r.label); disposeSprite(r.label); }
+      r.label = makeLabel(RUNE_GLYPHS[sym.replace('*', '')], { color: solved ? '#ffd84a' : '#bfe8ff', size: 72, h: 0.55 });
+      r.label.position.y = 2.9;
+      r.sg.add(r.label);
+    }
+  }
+
   // Wall torches, bones and rubble along the dungeon halls.
   function buildDungeons() {
     for (const dg of DUNGEONS) {
@@ -1671,6 +1813,11 @@ const Render3D = (() => {
         const x = i % W, y = (i - x) / W;
         const sg = new C.Group();
         if (svc.type === 'chest') { const chest = chestModel(!!state.opened[svc.poi]); chests.push({ chest, key: svc.poi }); sg.add(chest); }
+        else if (svc.type === 'rune') {
+          const rr = { svc, sg, sym: null, label: null };
+          runeObjs.push(rr);
+          sg.userData.rune = rr;
+        }
         else if (svc.type === 'forge') {
           sg.add(box(2.2, 0.4, 1.6, 0x6a665e, 0, 0.2, 0), box(1.6, 0.9, 1.1, 0x7a766e, 0, 0.85, -0.1), mesh(geo('BoxGeometry', 0.9, 0.08, 0.6), mat(0x2a2420), 0, 1.32, -0.1, false));
           sg.add(box(0.7, 2.6, 0.7, 0x5a564e, 0, 2.6, -0.45), box(0.9, 0.2, 0.9, 0x6a665e, 0, 3.95, -0.45));
@@ -2817,6 +2964,8 @@ const Render3D = (() => {
       wander(w, dt, t);
       if (w.a.carry) w.a.armR.rotation.x = -1.1;
     }
+    for (const b of boardObjs) { const m = Story.boardMark(b.town); b.marks['!'].visible = m === '!'; b.marks['?'].visible = m === '?'; }
+    updateSecrets(t);
     for (const n of npcObjs) {
       const here = Story.npcHere(n.npc), mark = here ? Story.npcMark(n.npc) : '';
       n.a.g.visible = here;

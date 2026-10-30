@@ -80,15 +80,25 @@ guarded by a Frost Drake.
 skeletons and ruled by the Crypt Lord, and Frostdeep Cavern, under the taiga, home to cave
 trolls and the Frost Wurm. They are dark, torchlit halls, and each boss guards a hoard.
 
-**The Long Winter.** Each winter is longer than the last. The Royal Herald in Ironhold sends you north to
-Frosthollow, where Elder Ysolde blames something stirring beneath the ice. To end the winter you must
-recover the three relics of the Firstsmiths (from the Crypt Lord, the Buried Temple and the Frost Drake),
-wake the ancient Firstforge at the foot of Mount Skyhorn to make the blade Frostbane, and slay the Frost
-Wurm. The world changes as the story goes on: snow creeps south until it reaches Ironhold, northern lakes
-freeze solid enough to walk on, and Frosthollow pays a fortune for food. The thaw brings spring flowers
-everywhere. In a side story, the Bandit King of Rat's Nest demands a toll: pay it and the raids stop,
-or refuse and face him at the Red Stones. Your quest is shown under your stats, a gold star on the map
-marks the way, and **J** opens the quest log and journal.
+**Play your way.** There's no set path. Every town square has a **notice board** with work (monster hunts,
+deliveries, places to find) and rumours, and people with a **!** over their heads have something to say.
+New quests aren't tracked until you choose: press **J** and click Track to show one under your stats and
+as a gold star on the map.
+
+**The Long Winter** is there if you want it. Each winter is longer than the last, and the Royal Herald in
+Ironhold would like someone to find out why. Elder Ysolde in Frosthollow blames a Frost Wurm beneath the ice.
+Recover the three relics of the Firstsmiths, in any order (the Crypt Lord, the Buried Temple and the Frost
+Drake carry them), wake the Firstforge at the foot of Mount Skyhorn to make the blade Frostbane, and slay
+the Wurm. Or go after the Wurm early if you're brave: without Frostbane every hit barely scratches it. The
+winter waits for you, but as the story moves it changes the world: snow creeps south to Ironhold, northern
+lakes freeze solid enough to walk on, and the thaw brings spring. In a side story, the Bandit King of Rat's
+Nest demands a toll: pay it and the raids stop, or refuse and face him at the Red Stones.
+
+**Secrets.** Forty glowing **star seeds** are hidden on peaks, islands and lonely corners; offer five at any
+shrine for more stamina or pack space. Old **cairns** mark buried treasure (bring a pickaxe). Each
+**stone circle** has a riddle carved in its altar: turn the rune stones at the four compass points to answer it.
+
+**Bridges** are arched stone near the towns, timber in the wilds and rope out to the Corsair Isles.
 
 **Caravans.** A Trading Post sends covered wagons along the roads to any town you've visited. Each one
 sells a load from your storehouse at that town's prices and can spend the takings on goods to bring

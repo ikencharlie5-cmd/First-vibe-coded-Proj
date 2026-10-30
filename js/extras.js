@@ -98,7 +98,12 @@ const ACHIEVEMENTS = [
   { id: 'sailor',   name: 'Sailor',           desc: 'Set sail in your own boat.',                  check: () => !!state.stats.sailed },
   { id: 'rider',    name: 'Rider',            desc: 'Ride your own horse.',                        check: () => !!state.mounted },
   { id: 'friend',   name: 'Best Friend',      desc: 'Take a pet on your travels.',                 check: () => !!petKind() },
-  { id: 'spring',   name: 'The Long Winter',  desc: 'End the Long Winter.',                        check: () => state.story.step >= 8 },
+  { id: 'spring',   name: 'The Long Winter',  desc: 'End the Long Winter.',                        check: () => !!state.story.done },
+  { id: 'seeds',    name: 'Seed Seeker',      desc: 'Find 10 star seeds.',                         check: () => Object.keys(state.story.seeds || {}).length >= 10 },
+  { id: 'allseeds', name: 'Starry-Eyed',      desc: 'Find every star seed.',                       check: () => Object.keys(state.story.seeds || {}).length >= starSeeds.length },
+  { id: 'digger',   name: 'Treasure Hunter',  desc: 'Dig up 5 buried treasures.',                  check: () => Object.keys(state.story.dug || {}).length >= 5 },
+  { id: 'runes',    name: 'Stone Whisperer',  desc: 'Solve every stone circle\'s riddle.',          check: () => Object.keys(state.story.solved || {}).length >= Object.keys(RIDDLES).length },
+  { id: 'helper',   name: 'Helping Hand',     desc: 'Complete 10 notice-board quests.',            check: () => (state.story.questsDone || 0) >= 10 },
   { id: 'year',     name: 'A Year Goes By',   desc: 'See all four seasons.',                       check: () => state.day > DAYS_PER_SEASON * 3 },
 ];
 
@@ -107,7 +112,7 @@ function checkAchievements() {
     if (state.ach[a.id] || !a.check()) continue;
     state.ach[a.id] = state.day;
     toast(`Achievement: ${a.name}`, 'gold');
-    log(`Achievement unlocked: ${a.name}. ${a.desc}`, 'gold');
+    log(a.desc, 'level');
     Sound.sfx('levelup');
   }
 }

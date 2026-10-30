@@ -1,10 +1,11 @@
 // Active combat: stamina, dodge rolls, blocking, weapon specials, and the big monsters' telegraphed attacks.
 'use strict';
 
-const STAMINA_MAX = 100;
+// Star-seed blessings raise your stamina by 10 each.
+const staminaMax = () => 100 + 10 * ((state && state.story.upg && state.story.upg.stamina) || 0);
 const DODGE = { cost: 25, time: 0.32, speed: 13, iframes: 450 };
 const SPECIAL = { cost: 60, cooldown: 8000 };
-const combat = { stamina: STAMINA_MAX, dodgeLeft: 0, dodgeX: 0, dodgeY: 0, iframesUntil: 0, blocking: false, specialAt: 0, rolled: 0 };
+const combat = { stamina: 100, dodgeLeft: 0, dodgeX: 0, dodgeY: 0, iframesUntil: 0, blocking: false, specialAt: 0, rolled: 0 };
 
 const invulnerable = now => now < combat.iframesUntil;
 
@@ -51,7 +52,7 @@ function dodgeMove(dt, now) {
 
 function updateStamina(dt) {
   const regen = combat.blocking ? 4 : combat.dodgeLeft > 0 ? 0 : 24;
-  combat.stamina = Math.min(STAMINA_MAX, combat.stamina + regen * dt);
+  combat.stamina = Math.min(staminaMax(), combat.stamina + regen * dt);
   combat.blocking = (keys.has('q')) && combat.stamina > 1 && !state.sailing && !state.mounted;
 }
 

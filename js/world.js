@@ -444,7 +444,92 @@ function generateWorld() {
   }
 
   decorateWorld(r);
+  buildBridgeSpans();
+  hideSecrets(mulberry32(777));
   computeColors();
+}
+
+// ---------------------------------------------------------------- secrets
+// Star seeds tucked away on peaks, islands and lonely corners, and cairns marking buried treasure.
+const starSeeds = [];   // { x, y }
+const cairns = [];      // { x, y }
+function hideSecrets(r) {
+  const far = (list, x, y, d) => list.every(p => Math.hypot(p.x - x, p.y - y) >= d);
+  // Only hide things you can walk to (trees can be chopped, so they don't count as walls).
+  const reach = new Uint8Array(W * H), q = [idx(HOMESTEAD.x, HOMESTEAD.y)];
+  reach[q[0]] = 1;
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h], x = c % W, y = (c - x) / W;
+    for (const [a, b] of N4) { const n = idx(x + a, y + b); if (!reach[n] && WALKABLE.has(terrain[n]) && !townBlocks.has(n)) { reach[n] = 1; q.push(n); } }
+  }
+  const cands = [];
+  for (let k = 0; k < 20000; k++) {
+    const x = 3 + Math.floor(r() * (W - 6)), y = 3 + Math.floor(r() * (H - 6)), i = idx(x, y), t = terrain[i];
+    if (!reach[i] || !WALKABLE.has(t) || t === T.BRIDGE || t === T.FLOOR || inDungeonRect(x, y) || nodes.has(i) || services.has(i) || townBlocks.has(i)) continue;
+    if (townAt(x, y, 10) || Math.hypot(x - HOMESTEAD.x, y - HOMESTEAD.y) < 12) continue;
+    const b = biome[i];
+    // Reward going somewhere: high ground, islands, and places far from any road.
+    const score = Math.min(tileH[i], 9) * 0.6 + Math.min(tileRoad[i], 40) / 8 + (b === BIOME.ISLES ? 3 : 0) + r() * 2;
+    cands.push({ x, y, score, t });
+  }
+  cands.sort((a, b) => b.score - a.score);
+  for (const c of cands) {
+    if (starSeeds.length >= 40) break;
+    if (far(starSeeds, c.x, c.y, 26)) starSeeds.push({ x: c.x, y: c.y });
+  }
+  for (const c of cands.filter(c => c.t === T.GRASS || c.t === T.SAND)) {
+    if (cairns.length >= 12) break;
+    if (!far(cairns, c.x, c.y, 60) || !far(starSeeds, c.x, c.y, 4)) continue;
+    cairns.push({ x: c.x, y: c.y });
+    services.set(idx(c.x, c.y), { type: 'dig', id: `cairn${cairns.length}` });
+  }
+}
+
+// ---------------------------------------------------------------- bridges
+// Each connected run of bridge tiles is one bridge. Its deck runs from bank to bank:
+// stone bridges arch up, timber ones rise gently, rope bridges sag, and piers stay flat.
+const bridges = [];
+const bridgeOf = new Int16Array(W * H).fill(-1);
+const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const isLand = i => WALKABLE.has(terrain[i]) && terrain[i] !== T.BRIDGE;
+function buildBridgeSpans() {
+  for (let i = 0; i < W * H; i++) {
+    if (terrain[i] !== T.BRIDGE || bridgeOf[i] >= 0) continue;
+    const id = bridges.length, tiles = [], q = [i];
+    bridgeOf[i] = id;
+    while (q.length) {
+      const c = q.pop(), x = c % W, y = (c - x) / W;
+      tiles.push(c);
+      for (const [a, b] of N4) {
+        const n = idx(x + a, y + b);
+        if (terrain[n] === T.BRIDGE && bridgeOf[n] < 0) { bridgeOf[n] = id; q.push(n); }
+      }
+    }
+    const xy = c => [c % W, Math.floor(c / W)];
+    const ends = tiles.filter(c => { const [x, y] = xy(c); return N4.some(([a, b]) => isLand(idx(x + a, y + b))); });
+    const far = (from, list) => list.reduce((best, c) => { const [x, y] = xy(c), d = Math.hypot(x - from[0], y - from[1]); return d > best.d ? { c, d } : best; }, { c: list[0], d: -1 }).c;
+    const a = xy(ends.length ? far(xy(tiles[0]), ends) : tiles[0]);
+    const pier = ends.length < 2 || Math.hypot(...xy(far(a, ends)).map((v, k) => v - a[k])) < 2;
+    const b = xy(far(a, pier ? tiles : ends));
+    // Centre each end across the bridge's width.
+    const centre = p => { const near = (pier && p === b ? tiles : ends).filter(c => { const [x, y] = xy(c); return Math.hypot(x - p[0], y - p[1]) < 3; }).map(xy);
+      return [near.reduce((s, v) => s + v[0], 0) / near.length, near.reduce((s, v) => s + v[1], 0) / near.length]; };
+    const [x0, y0] = centre(a), [x1, y1] = centre(b);
+    const bank = (x, y) => { let s = 0, n = 0; for (let yy = Math.round(y) - 2; yy <= Math.round(y) + 2; yy++) for (let xx = Math.round(x) - 2; xx <= Math.round(x) + 2; xx++) { const k = idx(xx, yy); if (isLand(k)) { s += tileH[k]; n++; } } return n ? Math.max(0.2, s / n) : 0.3; };
+    const len = Math.hypot(x1 - x0, y1 - y0) + 1, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const near = nearestTown(cx, cy), bi = biome[idx(Math.round(cx), Math.round(cy))];
+    const style = pier ? 'timber' : near.dist < 45 ? 'stone' : (bi === BIOME.MARSH || bi === BIOME.ISLES || cy > coastY(cx) - 4) ? 'rope' : 'timber';
+    const h0 = bank(x0, y0), h1 = pier ? h0 : bank(x1, y1);
+    const rise = pier ? 0 : style === 'stone' ? Math.min(1.4, 0.3 + len * 0.07) : style === 'timber' ? Math.min(0.6, 0.15 + len * 0.03) : -Math.min(0.12 + len * 0.012, Math.min(h0, h1) - 0.12);
+    const br = { id, tiles, x0, y0, x1, y1, h0, h1, rise, style, pier, len };
+    bridges.push(br);
+    for (const c of tiles) { br.bed = br.bed || {}; br.bed[c] = tileH[c]; tileH[c] = bridgeDeck(br, c % W, Math.floor(c / W)); }
+  }
+}
+function bridgeDeck(b, px, py) {
+  const dx = b.x1 - b.x0, dy = b.y1 - b.y0, l2 = dx * dx + dy * dy || 1;
+  const t = clamp(((px - b.x0) * dx + (py - b.y0) * dy) / l2, 0, 1);
+  return lerp(b.h0, b.h1, t) + b.rise * Math.sin(Math.PI * t);
 }
 
 function computeColors() {
@@ -480,6 +565,8 @@ function computeColors() {
 
 // Ground height at any world position, interpolated from the corner grid.
 function groundHeight(px, py) {
+  const bt = bridgeOf[idx(clamp(Math.round(px), 0, W - 1), clamp(Math.round(py), 0, H - 1))];
+  if (bt >= 0) return bridgeDeck(bridges[bt], px, py);
   const u = clamp(px + 0.5, 0, W - 0.001), v = clamp(py + 0.5, 0, H - 0.001);
   const x0 = Math.floor(u), y0 = Math.floor(v), fx = u - x0, fy = v - y0;
   const k = y0 * (W + 1) + x0;
@@ -620,7 +707,11 @@ function decorateWorld(r) {
     } else if (def.kind === 'stones') {
       for (let k = 0; k < 8; k++) {
         const a = k / 8 * Math.PI * 2;
-        part('standing', Math.round(x + Math.cos(a) * 3), Math.round(y + Math.sin(a) * 3), true, a);
+        const sx = Math.round(x + Math.cos(a) * 3), sy = Math.round(y + Math.sin(a) * 3);
+        part('standing', sx, sy, true, a);
+        // The four stones at the compass points carry runes for the circle's riddle.
+        const dir = ['E', null, 'S', null, 'W', null, 'N', null][k];
+        if (dir) services.set(idx(sx, sy), { type: 'rune', poi: def.id, dir });
       }
       services.set(idx(x, y), { type: 'shrine', poi: def.id });
     } else if (def.kind === 'camp') {
@@ -796,6 +887,8 @@ function layTown(id, d) {
   // People with a part in the story wait on the square.
   const npc = { ironhold: 'herald', frosthollow: 'elder', ratsnest: 'king' }[id];
   if (npc) services.set(idx(d.pc.x + 2, d.pc.y + 2), { type: 'npc', npc, town: id });
+  // Every town square has a notice board with work and rumours.
+  services.set(idx(d.pc.x - 2, d.pc.y + 2), { type: 'board', town: id });
   const street = (x, y) => d.terraces ? Math.abs(x - d.x) <= 2 : Math.abs(x - d.x) <= 2 || Math.abs(y - d.y) <= 2;
   const big = id === 'ironhold';
   const plaza = (x, y) => Math.abs(x - d.pc.x) <= (big ? 5 : 4) && Math.abs(y - d.pc.y) <= (big ? 4 : 2);
