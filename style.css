@@ -210,3 +210,6 @@ tr.locked { opacity: 0.45; }
   #minimap { width: 134px; height: 134px; }
   #panel { top: 200px; width: min(440px, 94vw); }
 }
+.caravan { border: 1px solid rgba(90, 64, 32, 0.35); border-radius: 6px; padding: 6px 10px; margin: 8px 0; background: rgba(255, 255, 255, 0.25); }
+.caravan p { margin: 4px 0; }
+.name-input { width: 100%; box-sizing: border-box; font: 600 18px var(--title); padding: 6px 10px; border: 2px solid #8a6a3a; border-radius: 6px; background: #fbf3dc; color: #3a2410; }

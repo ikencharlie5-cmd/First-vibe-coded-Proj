@@ -253,6 +253,15 @@ const STRUCTS = {
                  gather: 'mining', workers: [2, 4, 6], desc: 'Workers mine the rocks around it.' },
   guard_tower: { name: 'Guard Tower',  size: 2, con: 12, work: 12, cost: { stone: 40, oak_plank: 8, iron_bar: 4 },
                  guards: [2, 3, 4], desc: 'Guards protect everything within 14 tiles from bandit raids.' },
+  wall:        { name: 'Wall',         size: 1, con: 6,  work: 1,  instant: true, cost: { pine_log: 2, stone: 2 },
+                 wall: true, desc: 'A palisade section, up as soon as you place it. Walls near your buildings help your guards beat back raids. Upgrade to stone.' },
+  gate:        { name: 'Gate',         size: 1, con: 6,  work: 1,  instant: true, cost: { pine_plank: 4, stone: 2 },
+                 wall: true, passable: true, desc: 'A gate in your walls. You can walk through it; monsters can too, so guard it.' },
+  trading_post: { name: 'Trading Post', size: 3, con: 15, work: 12, cost: { oak_plank: 20, iron_bar: 4, pine_log: 10 },
+                 caravans: [1, 2, 3], desc: 'Sends wagon caravans from your storehouse to sell goods in other towns and bring back whatever you choose.' },
+  town_hall:   { name: 'Town Hall',    size: 3, con: 20, work: 16, cost: { oak_plank: 30, stone: 40, iron_bar: 8 },
+                 unique: true, charter: { folk: 6, buildings: 8 },
+                 desc: 'Found your own town. Needs 6 townsfolk (workers and guards) and 8 finished buildings. Your town gets a market, a carriage stop and taxes.' },
 };
 const STRUCT_MAX_LEVEL = 3;
 
@@ -296,5 +305,10 @@ const EMPIRE = {
   storeRadius: 20,                     // stations within this range of a storehouse can use its goods
   raidInterval: 150,                   // seconds between raid rolls
   offlineCapHours: 12,
+  caravanLoad: 50,                     // goods per wagon
+  caravanSpeed: 1.6,                   // tiles per second along the roads
+  caravanGuardFee: 25,                 // gold per guard per trip
+  taxPerFolk: 1.5,                     // gold per minute for each townsfolk once you found a town
+  wallPower: 1,                        // defence per wall level near a building
   packBase: 40,
 };

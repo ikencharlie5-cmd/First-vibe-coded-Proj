@@ -513,14 +513,41 @@ const Render3D = (() => {
     return a;
   }
 
+  // A covered wagon with its horse and driver; guards walk alongside.
+  function caravanModel(guards) {
+    const g = new C.Group();
+    g.add(box(0.8, 0.3, 1.5, 0x7a5232, 0, 0.55, 0));
+    const cover = new C.Mesh(geo('CylinderGeometry', 0.5, 0.5, 1.4, 10, 1, false, 0, Math.PI), mat(0xeee6d0));
+    cover.rotation.z = Math.PI / 2; cover.rotation.y = Math.PI / 2; cover.position.set(0, 0.7, 0);
+    g.add(cover);
+    for (const [x, z] of [[-0.45, -0.5], [0.45, -0.5], [-0.45, 0.5], [0.45, 0.5]]) { const w = cyl(0.28, 0.28, 0.07, 0x4a3220, x, 0.28, z, 10); w.rotation.z = Math.PI / 2; g.add(w); }
+    g.add(box(0.06, 0.06, 0.9, 0x6b4a2b, -0.18, 0.45, 1.1), box(0.06, 0.06, 0.9, 0x6b4a2b, 0.18, 0.45, 1.1));
+    const horse = new C.Group();
+    horse.add(box(0.3, 0.32, 0.7, 0x7a4a2a, 0, 0.62, 0), box(0.18, 0.32, 0.18, 0x7a4a2a, 0, 0.9, 0.38), box(0.16, 0.14, 0.26, 0x6a3a1a, 0, 0.98, 0.52));
+    for (const [lx, lz] of [[-0.1, 0.25], [0.1, 0.25], [-0.1, -0.25], [0.1, -0.25]]) horse.add(box(0.08, 0.46, 0.08, 0x5a3a1a, lx, 0.23, lz));
+    horse.position.z = 1.65;
+    g.add(horse);
+    const driver = townsfolk(0x6a4a8a);
+    driver.g.position.set(0, 0.5, 0.75); driver.g.scale.setScalar(0.9);
+    g.add(driver.g);
+    for (let k = 0; k < guards; k++) {
+      const a = worker(0x5a5f6a, 'spear');
+      a.g.position.set(k % 2 ? 0.75 : -0.75, 0, -0.3 + Math.floor(k / 2) * 0.9);
+      g.add(a.g);
+      g.userData.walkers = (g.userData.walkers || []).concat(a);
+    }
+    g.userData.horse = horse;
+    return g;
+  }
+
   // Your sailboat: the player stands amidships.
   function sailboatModel() {
     const g = new C.Group();
     g.add(box(0.95, 0.32, 2.0, 0x7a5232, 0, 0.06, 0), box(0.75, 0.08, 1.7, 0x5a3a20, 0, 0.2, 0), box(0.1, 0.36, 2.0, 0x8a6338, 0.47, 0.12, 0), box(0.1, 0.36, 2.0, 0x8a6338, -0.47, 0.12, 0));
     const prow = cone(0.48, 0.7, 0x7a5232, 0, 0.1, 1.3, 4); prow.rotation.x = Math.PI / 2; prow.rotation.y = Math.PI / 4; prow.scale.set(1, 1, 0.5); g.add(prow);
-    g.add(cyl(0.045, 0.05, 2.6, 0x5a3a1e, 0, 1.45, 0.35, 5), box(0.05, 0.05, 1.3, 0x5a3a1e, 0, 0.75, -0.1));
+    g.add(cyl(0.045, 0.05, 2.6, 0x5a3a1e, 0, 1.45, 0.35, 5), box(1.4, 0.06, 0.06, 0x5a3a1e, 0, 2.5, 0.35), box(1.4, 0.06, 0.06, 0x5a3a1e, 0, 0.8, 0.35));
     const sail = new C.Mesh(geo('PlaneGeometry', 1.25, 1.7), new C.MeshLambertMaterial({ color: 0xeee6d0, side: C.DoubleSide }));
-    sail.position.set(0, 1.65, -0.1); sail.rotation.y = Math.PI / 2;
+    sail.position.set(0, 1.65, 0.3);
     g.add(sail);
     g.add(box(0.05, 0.4, 0.6, 0xb0302a, 0, 2.55, 0.35));
     g.userData.sail = sail;
@@ -1985,6 +2012,61 @@ const Render3D = (() => {
     return gloom;
   }
 
+  // ------------------------------------------------------------ caravans on the road, and the people of your town
+  const wagonObjs = new Map();
+  function updateCaravans(dt, t) {
+    const live = new Set();
+    for (const c of state.caravans) {
+      if (c.phase === 'idle') continue;
+      const post = structById(c.post), route = post && caravanRoute(post, c.town);
+      if (!route) continue;
+      const f = c.phase === 'out' ? c.t : 1 - c.t, p = routePoint(route, f);
+      const near = Math.abs(p.x - player.vx) < 70 && Math.abs(p.y - player.vz) < 70;
+      let o = wagonObjs.get(c.id);
+      if (!near) { if (o) o.g.visible = false; if (o) live.add(c.id); continue; }
+      if (!o || o.guards !== c.guards) { if (o) scene.remove(o.g); o = { g: caravanModel(c.guards), guards: c.guards, rot: 0 }; scene.add(o.g); wagonObjs.set(c.id, o); }
+      live.add(c.id);
+      o.g.visible = true;
+      const dir = c.phase === 'out' ? 1 : -1;
+      if (p.dx || p.dy) o.rot = lerpAngle(o.rot, Math.atan2(p.dx * dir, p.dy * dir), Math.min(1, dt * 4));
+      o.g.position.set(p.x, gh(p.x, p.y) + Math.abs(Math.sin(t * 6)) * 0.03, p.y);
+      o.g.rotation.y = o.rot;
+      for (const a of o.g.userData.walkers || []) animateLimbs(a, true, false, dt, t, 9);
+      o.g.userData.horse.position.y = Math.abs(Math.sin(t * 7)) * 0.04;
+    }
+    for (const [id, o] of wagonObjs) if (!live.has(id)) { scene.remove(o.g); wagonObjs.delete(id); }
+  }
+
+  // Once your town is founded, settlers stroll between your buildings.
+  const myFolk = [];
+  function updateMyTown(dt, t) {
+    const hall = state.myTown && structById(state.myTown.hall);
+    const want = hall ? Math.min(14, 3 + staffCount()) : 0;
+    while (myFolk.length > want) scene.remove(myFolk.pop().a.g);
+    if (!hall) return;
+    const c = structCenter(hall);
+    if (Math.hypot(c.x - player.vx, c.y - player.vz) > 70) return;
+    const folkColors = [0x3a6a9e, 0x9e5a3a, 0x5a8a3a, 0x8a3a6a, 0xc0a040, 0x6a4a8a, 0x2a7a7a];
+    const okTile = (x, y) => { const i = idx(Math.round(x), Math.round(y)); return WALKABLE.has(terrain[i]) && !structIndex.has(i) && !nodes.has(i); };
+    const pickSpot = () => {
+      const ss = state.structs.filter(s => s.level);
+      for (let k = 0; k < 20; k++) {
+        const s = ss[Math.floor(Math.random() * ss.length)], sc = structCenter(s), sz = structSize(s);
+        const x = sc.x + (Math.random() - 0.5) * (sz + 4), y = sc.y + (Math.random() - 0.5) * (sz + 4);
+        if (Math.hypot(x - c.x, y - c.y) < 22 && okTile(x, y)) return [x, y];
+      }
+      return [c.x, c.y + 2.5];
+    };
+    while (myFolk.length < want) {
+      const a = townsfolk(folkColors[myFolk.length % folkColors.length]);
+      const [x, y] = pickSpot();
+      const w = { a, x, z: y, tx: x, tz: y, pause: Math.random() * 3, speed: 1.1 + Math.random() * 0.4, idle: () => 1 + Math.random() * 4 };
+      w.pick = () => { const [nx, ny] = pickSpot(); w.tx = nx; w.tz = ny; };
+      scene.add(a.g); myFolk.push(w);
+    }
+    for (const w of myFolk) wander(w, dt, t);
+  }
+
   // ------------------------------------------------------------ your settlement: workers hauling goods
   function updateCarriers(dt, t) {
     const stores = state.structs.filter(s => s.type === 'storehouse' && s.level);
@@ -2199,6 +2281,58 @@ const Render3D = (() => {
       const hut = new C.Group(); HOUSES.saltmere(hut, 0.2); hut.scale.setScalar(L >= 2 ? 0.6 : 0.42); hut.position.set(-dir[0] * 0.4, 0, -dir[1] * 0.4); hut.rotation.y = Math.atan2(dir[0], dir[1]); g.add(hut);
       for (let k = 0; k < 3; k++) g.add(box(0.04, 0.9, 0.04, 0x8a6a3a, S / 2 - 0.3 - k * 0.2, 0.45, -S / 2 + 0.3));
     },
+    wall: (g, s) => {
+      const L = lv(s);
+      if (L === 1) {
+        for (let k = 0; k < 4; k++) { const h = 1.7 + (k % 2) * 0.15; g.add(cyl(0.13, 0.14, h, 0x7a5432, -0.375 + k * 0.25, h / 2, 0, 6), cone(0.13, 0.25, 0x6a4a2a, -0.375 + k * 0.25, h + 0.12, 0, 6)); }
+        g.add(box(1.02, 0.1, 0.1, 0x5a3a20, 0, 0.6, 0.14), box(1.02, 0.1, 0.1, 0x5a3a20, 0, 1.3, 0.14));
+      } else {
+        const h = L === 2 ? 2.0 : 2.6, c = L === 2 ? 0x8a857c : 0x9a948a;
+        g.add(box(1.02, h, 0.8, c, 0, h / 2, 0), box(1.04, 0.15, 0.84, 0x6a655e, 0, 0.3, 0));
+        for (const x of [-0.3, 0.3]) g.add(box(0.32, 0.4, 0.82, c, x, h + 0.2, 0));
+        if (L === 3) g.add(box(1.04, 0.15, 0.84, 0x6a655e, 0, h - 0.4, 0));
+      }
+    },
+    gate: (g, s) => {
+      const L = lv(s), c = L === 1 ? 0x7a5432 : 0x8a857c, h = L === 1 ? 2.3 : 2.8;
+      for (const x of [-0.45, 0.45]) g.add(L === 1 ? cyl(0.15, 0.16, h, c, x, h / 2, 0, 6) : box(0.3, h, 0.8, c, x, h / 2, 0));
+      g.add(box(1.2, 0.25, L === 1 ? 0.3 : 0.85, c, 0, h - 0.1, 0));
+      for (const x of [-0.42, 0.42]) { const d = box(0.36, 1.7, 0.06, 0x5a3a20, x, 0.9, 0.3); d.rotation.y = x < 0 ? -1.2 : 1.2; g.add(d); }
+      g.add(box(0.06, 0.4, 0.5, TOWN_COLORS.ironhold, 0, h - 0.45, 0.2));
+    },
+    trading_post: (g, s) => {
+      const L = lv(s), S = structSize(s);
+      g.add(box(S - 0.6, 1.8, S - 1.2, 0x9a7444, -0.1, 0.9, -0.4));
+      timbers(g, S - 0.6, S - 1.2, 0, 1.8, 0x5a3a20, false);
+      roof(g, S - 0.6, S - 1.2, 0.9, 1.8, 0x6a4a3a, 0x9a7444, { over: 0.3 });
+      g.add(box(1.0, 1.2, 0.06, 0x3a2614, -0.1, 0.6, S / 2 - 0.98));
+      const aw = box(S - 0.4, 0.06, 1.0, 0xb08850, -0.1, 1.5, S / 2 - 0.5); aw.rotation.x = 0.25; g.add(aw);
+      g.add(cyl(0.03, 0.03, 2.2, 0x2a2a2a, S / 2 - 0.25, 1.1, S / 2 - 0.3, 4), box(0.06, 0.5, 0.8, 0xc9a24a, S / 2 - 0.25, 2.0, S / 2 - 0.65));
+      const crates = new C.Group(), barrel = new C.Group();
+      PROP_MODELS.crates(crates); PROP_MODELS.barrel(barrel);
+      crates.position.set(S / 2 - 0.6, 0, S / 2 - 0.5); barrel.position.set(-S / 2 + 0.4, 0, S / 2 - 0.4);
+      g.add(crates, barrel);
+      if (L >= 2) { const wg = caravanModel(0); wg.position.set(S / 2 + 0.6, 0, 0.2); wg.rotation.y = Math.PI; g.add(wg); }
+      if (L >= 3) g.add(box(1.2, 1.4, 1.2, 0x8a6338, -S / 2 - 0.4, 0.7, -0.6), cone(0.95, 0.6, 0x5a3a2a, -S / 2 - 0.4, 1.7, -0.6, 4));
+    },
+    town_hall: (g, s) => {
+      const L = lv(s), S = structSize(s), stone = 0x9a948a, wall = 0xe8dcc0;
+      g.add(box(S + 0.2, 0.5, S, stone, 0, 0.25, 0), box(S - 0.2, 2.2, S - 0.6, wall, 0, 1.6, -0.1));
+      timbers(g, S - 0.2, S - 0.6, 0.5, 2.2, 0x46301c, true);
+      roof(g, S - 0.2, S - 0.6, 1.5, 2.7, 0x7a3a2a, wall, { over: 0.35 });
+      door(g, (S - 0.6) / 2 - 0.1, { color: 0x5a3a20, bands: true, w: 0.9, h: 1.5, y: 0.5 });
+      for (const x of [-0.95, 0.95]) win(g, x, 1.9, (S - 0.6) / 2 - 0.07, 0, { shutter: 0x3a5a7a, flowers: true });
+      for (const x of [-S / 2 + 0.2, S / 2 - 0.2]) g.add(box(0.12, 0.12, 0.12, 0x46301c, x, 0.5, S / 2 - 0.1));
+      g.add(box(S + 0.2, 0.12, 0.9, 0x8a847a, 0, 0.56, S / 2 - 0.1));
+      // Bell tower, taller with each level.
+      const th = 1.6 + L * 0.9;
+      g.add(box(1.0, th, 1.0, stone, 0, 2.7 + th / 2, -0.4), box(1.2, 0.15, 1.2, 0x7a746a, 0, 2.7 + th, -0.4));
+      for (const x of [-0.42, 0.42]) g.add(box(0.16, 0.8, 1.0, stone, x, 3.1 + th, -0.4));
+      g.add(cyl(0.18, 0.26, 0.35, 0xc9a24a, 0, 3.0 + th, -0.4, 8), cone(0.85, 1.3, 0x5a3a44, 0, 4.2 + th, -0.4, 4));
+      g.add(cyl(0.3, 0.3, 0.05, 0xf2ead8, 0, 2.2 + th, 0.11, 12).rotateX(Math.PI / 2));
+      g.add(cyl(0.035, 0.035, 1.6, 0x3a2a1a, 0, 5.4 + th, -0.4, 5), box(0.04, 0.5, 0.8, TOWN_COLORS.ironhold, 0, 5.9 + th, 0.0));
+      for (const x of [-S / 2 - 0.1, S / 2 + 0.1]) { const b = new C.Group(); PROP_MODELS.banner(b, 'ironhold'); b.position.set(x, 0, S / 2 - 0.2); g.add(b); }
+    },
     guard_tower: (g, s) => {
       const S = structSize(s), L = lv(s);
       if (L === 1) {
@@ -2262,8 +2396,10 @@ const Render3D = (() => {
         });
       }
     }
-    const text = s.pending ? `${def.name} ${Math.floor(s.work / workNeeded(s) * 100)}%` : `${def.name}${s.level > 1 ? ' Lv' + s.level : ''}`;
-    const label = makeLabel(text, { color: s.pending ? '#ffd27a' : '#ffe9a8', h: 0.3 });
+    if (def.wall && !s.pending) return { g, crew };
+    const hallName = s.type === 'town_hall' && state.myTown && state.myTown.hall === s.id ? state.myTown.name : null;
+    const text = s.pending ? `${def.name} ${Math.floor(s.work / workNeeded(s) * 100)}%` : hallName || `${def.name}${s.level > 1 ? ' Lv' + s.level : ''}`;
+    const label = makeLabel(text, hallName ? { color: '#fff4c8', size: 56, h: 0.8 } : { color: s.pending ? '#ffd27a' : '#ffe9a8', h: 0.3 });
     const box3 = new C.Box3().setFromObject(g);
     label.position.y = Math.max(1.7, box3.max.y + 0.5);
     g.add(label);
@@ -2274,7 +2410,7 @@ const Render3D = (() => {
     const live = new Set();
     for (const s of state.structs) {
       live.add(s.id);
-      const sig = `${s.level}:${s.pending}:${s.pending ? Math.floor(s.work / workNeeded(s) * 20) : 0}:${s.workers}:${s.guards ? s.guards.length : 0}`;
+      const sig = `${s.level}:${s.pending}:${s.pending ? Math.floor(s.work / workNeeded(s) * 20) : 0}:${s.workers}:${s.guards ? s.guards.length : 0}:${s.type === 'town_hall' && state.myTown ? state.myTown.name : ''}`;
       const cur = structObjs.get(s.id);
       if (cur && cur.sig === sig) continue;
       if (cur) removeStruct(s.id);
@@ -2579,6 +2715,8 @@ const Render3D = (() => {
       po.g.traverse(o => { if (o.userData.spin) { o.rotation.y = t; o.position.y = 1.2 + Math.sin(t * 2) * 0.08; } });
     }
     updateCritters(dt, t);
+    updateCaravans(dt, t);
+    updateMyTown(dt, t);
     updateFish(dt, now);
     updateCarriers(dt, t);
     waterTex.offset.set(t * 0.02, t * 0.013);

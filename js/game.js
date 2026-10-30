@@ -59,6 +59,7 @@ function newState() {
     savedAt: Date.now(), seenHelp: false,
     story: { step: 0, winter: 0, side: 0, choice: null, forgeLit: false, journal: [] },
     sailing: false,
+    caravans: [], myTown: null,
   };
 }
 
@@ -291,6 +292,8 @@ function stationRecipes(type) {
 function placementCheck(type, x, y) {
   const def = STRUCTS[type];
   if (lvl('construction') < def.con) return `Needs Construction ${def.con}`;
+  if (def.unique && state.structs.some(s => s.type === type)) return 'You already have one';
+  if (def.charter) { const why = charterProblem(); if (why) return why; }
   if (!hasAll(def.cost, nearStorehouse(x, y))) return 'Not enough materials';
   const tiles = footprint(x, y, def.size);
   let lo = Infinity, hi = -Infinity;
@@ -351,10 +354,18 @@ function placeStructure() {
   if (def.station) s.on = true;
   state.structs.push(s);
   indexStructs();
+  uiDirty = true;
+  // Walls and gates go up at once, and you can keep placing them.
+  if (def.instant) {
+    s.level = 1; s.pending = null;
+    addXp('construction', 4 + def.con);
+    Sound.sfx('build');
+    updateBuildMode();
+    return;
+  }
   log(`${def.name} site placed. Press E at it to build.`, 'good');
   Sound.sfx('place');
   buildMode = null;
-  uiDirty = true;
 }
 
 function startConstruct(s) {
@@ -380,7 +391,9 @@ function processConstruct(now) {
     if (s.type === 'house' && !state.home) state.home = s.id;
     if (structDef(s).gather && !s.out) s.out = campOutputs(s)[0] || null;
     if (structDef(s).station && !s.recipe) s.recipe = stationRecipes(s.type)[0] || null;
+    if (structDef(s).caravans) ensureCaravans();
     action = null;
+    if (s.type === 'town_hall' && s.level === 1 && !state.myTown) { openPanel('charter'); return; }
     uiDirty = true;
     return;
   }
@@ -437,6 +450,10 @@ function structAction(act, s, arg) {
     }
     case 'toggle': s.on = !s.on; break;
     case 'use': openPanel('craft', { sid: s.id }); return;
+    case 'cv': caravanAction(s, arg); break;
+    case 'charter': openPanel('charter'); return;
+    case 'hallmarket': openPanel('market', { town: 'mytown' }); return;
+    case 'hallcarriage': openPanel('carriage', { town: 'mytown' }); return;
     case 'demolish': {
       if (!confirm(`Demolish the ${def.name}? You get half the materials back.`)) return;
       for (const k in def.cost) {
@@ -445,6 +462,8 @@ function structAction(act, s, arg) {
       }
       state.structs = state.structs.filter(o => o !== s);
       if (state.home === s.id) state.home = null;
+      if (state.myTown && state.myTown.hall === s.id) { log(`Without its hall, ${state.myTown.name} is just a settlement again.`, 'warn'); state.myTown = null; defineMyTown(); }
+      ensureCaravans();
       indexStructs();
       closePanel();
       log(`You demolished the ${def.name}.`);
@@ -489,7 +508,8 @@ function solidTile(x, y, now) {
   if (!walkableTerrain(x, y) && !iceAt(x, y)) return true;
   const i = idx(x, y), n = nodes.get(i);
   if (n && SOLID_RES.has(n.res) && n.until <= now) return true;
-  return services.has(i) || townBlocks.has(i) || structIndex.has(i);
+  const st = structIndex.get(i);
+  return services.has(i) || townBlocks.has(i) || (!!st && !structDef(st).passable);
 }
 function collides(px, py, now) {
   for (let ty = Math.round(py - PLAYER_R); ty <= Math.round(py + PLAYER_R); ty++) {
@@ -1064,12 +1084,14 @@ function buy(town, id, n) {
   Sound.sfx('coins');
 }
 
-const carriageFee = (from, to) => 15 + Math.round(Math.hypot(TOWN_DEFS[from].x - TOWN_DEFS[to].x, TOWN_DEFS[from].y - TOWN_DEFS[to].y) / 4);
+const carriageFee = (from, to) => 15 + Math.round(Math.hypot(townXY(from).x - townXY(to).x, townXY(from).y - townXY(to).y) / 4);
 function travel(from, to) {
   const fee = carriageFee(from, to);
   if (state.gold < fee) { log(`The carriage costs ${fee} gold.`, 'warn'); return; }
   state.gold -= fee;
-  state.px = TOWN_DEFS[to].arrive.x; state.py = TOWN_DEFS[to].arrive.y;
+  const dest = townXY(to).arrive;
+  state.px = dest.x; state.py = dest.y;
+  if (collides(state.px, state.py, Date.now())) { state.px += 0.5; state.py += 1; }
   action = null;
   closePanel();
   log(`You ride the carriage to ${TOWNS[to].name}.`, 'good');
@@ -1090,11 +1112,16 @@ function towerDefense(s) {
     const tc = structCenter(t);
     if (Math.hypot(tc.x - c.x, tc.y - c.y) <= EMPIRE.towerRadius) d += t.guards.reduce((a, g) => a + EMPIRE.guardPower(g), 0);
   }
-  return d;
+  // Walls slow the raiders down, up to a point.
+  let walls = 0;
+  for (const t of state.structs) if (STRUCTS[t.type].wall && t.level && Math.hypot(t.x - c.x, t.y - c.y) <= EMPIRE.towerRadius) walls += t.level * EMPIRE.wallPower;
+  return d + Math.min(30, walls);
 }
 
 // Advance the empire by dt seconds. `report` collects totals for offline summaries.
 function simEmpire(dt, report) {
+  simCaravans(dt, report);
+  simTown(dt, report);
   const wage = wagesPerMin() * dt / 60;
   if (wage > 0) {
     if (state.gold < wage) {
@@ -1187,7 +1214,7 @@ function runOffline() {
   for (let t = 0; t < elapsed; t += 10) { simEmpire(Math.min(10, elapsed - t), report); advanceTime(Math.min(10, elapsed - t)); }
   for (let k = 0; k < Math.min(200, Math.floor(elapsed / 30)); k++) marketDrift();
   for (const town in TOWNS) state.markets[town].event = null;
-  if (!Object.keys(report.produced).length && !report.events.length && !report.wages) return null;
+  if (!Object.keys(report.produced).length && !report.events.length && !report.wages && !report.taxes) return null;
   return report;
 }
 
@@ -1288,7 +1315,7 @@ function renderHud() {
     $('quest-track').innerHTML = `<b>${esc(q.main.title)}</b>${q.main.progress ? ` <span class="dim small">(${esc(q.main.progress)})</span>` : ''}` +
       `${q.side ? `<div class="side small">Side: ${esc(q.side.title)}</div>` : ''}`;
   }
-  $('zone').textContent = regionName(state.px, state.py);
+  $('zone').textContent = state.myTown && myTownAt(state.px, state.py) ? state.myTown.name : regionName(state.px, state.py);
   const w = state.weather.kind;
   $('clock').innerHTML = `${Icons.ui(isNight() ? 'moon' : w === 'rain' ? 'rain' : w === 'clear' ? 'sun' : 'cloud')} Day ${state.day}, ${clockText()}`;
 
@@ -1352,6 +1379,7 @@ function buildMapImage() {
   mapImage = cv;
 }
 
+const mapTownIds = () => [...Object.keys(TOWN_DEFS), ...(state.myTown ? ['mytown'] : [])];
 function drawMinimap() {
   const cv = $('minimap'), g = cv.getContext('2d');
   const size = cv.width, scale = 2.2, yaw = state.camYaw;
@@ -1374,8 +1402,8 @@ function drawMinimap() {
     g.fillStyle = m.aggro ? '#ff3a2a' : '#b8443e';
     g.fillRect(m.x - state.px - 0.6, m.y - state.py - 0.6, 1.2, 1.2);
   }
-  for (const id in TOWN_DEFS) {
-    const d = TOWN_DEFS[id];
+  for (const id of mapTownIds()) {
+    const d = townXY(id);
     if (Math.abs(d.x - state.px) > 60 || Math.abs(d.y - state.py) > 60) continue;
     g.save();
     g.translate(d.x - state.px, d.y - state.py);
@@ -1433,7 +1461,7 @@ const PANEL_VIEWS = {
   pack: () => packHtml(), skills: () => skillsHtml(), craft: d => craftHtml(d), build: () => buildHtml(), struct: d => structHtml(d),
   market: d => marketHtml(d), carriage: d => carriageHtml(d), empire: () => empireHtml(), help: () => helpHtml(),
   offline: d => offlineHtml(d), map: () => mapHtml(), settings: () => settingsHtml(),
-  quests: () => Story.questsHtml(), talk: d => Story.talkHtml(d),
+  quests: () => Story.questsHtml(), talk: d => Story.talkHtml(d), charter: () => charterHtml(),
 };
 function renderPanel() {
   if (!panel) return;
@@ -1577,6 +1605,8 @@ function structHtml(data) {
     html += `<h3>Guards</h3><p class="small">${s.guards.length}/${def.guards[s.level - 1]} guards (defence ${s.guards.reduce((a, g) => a + EMPIRE.guardPower(g), 0)}).
       Each needs a sword from your pack and ${EMPIRE.guardCost}g. <button data-sact="guard">Hire guard</button><button data-sact="dismiss">Dismiss</button></p>`;
   }
+  if (def.caravans) html += caravanHtml(s);
+  if (s.type === 'town_hall') html += hallHtml(s);
   if (def.housing) html += `<p>Beds here: ${def.housing[s.level - 1]}. Beds used: ${staffCount()}/${housingCap()}.${state.home === s.id ? ' You respawn here.' : ''}</p>`;
   if (def.storage) {
     const items = Object.keys(state.store).sort((a, b) => itemName(a).localeCompare(itemName(b)));
@@ -1677,8 +1707,8 @@ function drawWorldMap() {
   g.drawImage(mapImage, 0, 0, W * 2, H * 2);
   for (const s of state.structs) { g.fillStyle = '#ffd84a'; g.fillRect(s.x * 2 - 1, s.y * 2 - 1, 5, 5); }
   g.font = 'bold 14px system-ui, sans-serif'; g.textAlign = 'center'; g.lineWidth = 3; g.strokeStyle = '#000';
-  for (const id in TOWN_DEFS) {
-    const d = TOWN_DEFS[id], name = state.discovered[id] ? TOWNS[id].name : '?';
+  for (const id of mapTownIds()) {
+    const d = townXY(id), name = state.discovered[id] ? TOWNS[id].name : '?';
     g.fillStyle = '#ffe9a8';
     g.fillRect(d.x * 2 - 4, d.y * 2 - 4, 8, 8);
     g.strokeText(name, d.x * 2, d.y * 2 - 9); g.fillText(name, d.x * 2, d.y * 2 - 9);
@@ -1709,6 +1739,9 @@ function helpHtml() {
   <h3>The Long Winter</h3>
   <p>The winters are growing longer. Your current quest is shown under your stats, and a gold star on the map marks where to go next. Press <kbd>J</kbd> for the quest log and journal.
   As the story moves on, the world changes with it.</p>
+  <h3>Caravans and your own town</h3>
+  <p>Build a <b>Trading Post</b> to send wagon caravans along the roads: they sell goods from your storehouse in any town you've visited and can bring back what you choose. Hire caravan guards against ambushes.
+  Once you have 6 townsfolk and 8 buildings, build a <b>Town Hall</b> and name your town: it gets its own market, a carriage stop and tax income, and settlers move in. Ring it with <b>Walls</b> and <b>Gates</b> to help your guards hold off raids.</p>
   <h3>Sailing</h3>
   <p>Craft a <b>sailboat</b> at a workbench (Crafting 18) or buy one in Saltmere. Face open water and press <kbd>E</kbd> to launch it, and <kbd>E</kbd> again facing the shore to land. Boats are fast, can reach fishing spots far from shore, and monsters can't follow you onto the water.</p>
   <h3>The world</h3>
@@ -1730,6 +1763,7 @@ function offlineHtml(r) {
     ${prod ? `<h3>Your workers produced</h3><ul>${prod}</ul>` : '<p class="dim">Your workers produced nothing.</p>'}
     ${used ? `<h3>Materials used</h3><ul>${used}</ul>` : ''}
     ${r.wages ? `<p>Wages paid: ${fmt(r.wages)}g</p>` : ''}
+    ${r.taxes ? `<p class="gold">Taxes collected: ${fmt(r.taxes)}g</p>` : ''}
     ${r.events.length ? `<h3>Events</h3><ul>${r.events.slice(0, 12).map(e => `<li>${esc(e)}</li>`).join('')}${r.events.length > 12 ? `<li>...and ${r.events.length - 12} more</li>` : ''}</ul>` : ''}
     <p class="small dim">Everything went into your storehouse.</p><button data-close="1">Continue</button>`];
 }
@@ -1774,6 +1808,7 @@ function onPanelClick(e) {
   const d = b.dataset, town = panel.data.town;
   if (d.close) closePanel();
   else if (d.talk) Story.choose(d.talk);
+  else if (d.found) foundTown($('town-name').value);
   else if (d.craft) startCraft(d.craft, +d.n, panel.data.sid);
   else if (d.build) startBuildMode(d.build);
   else if (d.sact) structAction(d.sact, structById(panel.data.sid), d.arg);
@@ -1812,6 +1847,7 @@ function init() {
   generateWorld();
   const loaded = load();
   if (!loaded) state = newState();
+  defineMyTown();
   marketInit();
   indexStructs();
   // Nothing grows through your buildings.

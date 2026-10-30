@@ -85,6 +85,15 @@ everywhere. In a side story, the Bandit King of Rat's Nest demands a toll: pay i
 or refuse and face him at the Red Stones. Your quest is shown under your stats, a gold star on the map
 marks the way, and **J** opens the quest log and journal.
 
+**Caravans.** A Trading Post sends covered wagons along the roads to any town you've visited. Each one
+sells a load from your storehouse at that town's prices and can spend the takings on goods to bring
+home. Set them to repeat and they run trade routes for you, even while you're away. Bandits may ambush
+them, so hire caravan guards, or deal with the Bandit King.
+
+**Your own town.** Once your settlement has 6 townsfolk and 8 buildings, build a Town Hall and name your
+town. It appears on the map with its own market and carriage stop, settlers stroll its streets, and your
+townsfolk pay taxes. Walls and gates, from wooden palisades up to stone, help your guards fight off raids.
+
 **Sailing.** Craft a sailboat (Crafting 18) or buy one in Saltmere. Face open water and press **E** to
 launch it. Boats are fast, can reach fishing spots far from shore, and keep you safe from monsters.
 
@@ -130,6 +139,7 @@ then visit http://localhost:8000.
 - `js/audio.js`: generated music, sound effects and ambience (Web Audio API, no audio files)
 - `js/icons.js`: item icons drawn on canvas, and the interface's SVG icons
 - `js/story.js`: the Long Winter story and the Bandit King side quest: quests, dialogue and world changes
+- `js/caravans.js`: trade caravans and founding your own town
 - `js/game.js`: game logic: movement, gathering, crafting, building, combat, markets, workers, raids, saving and UI panels
 - `js/render3d.js`: the 3D world: terrain, water, sky, weather, day/night, trees, grass, wildlife, towns, buildings, characters, effects and the orbit camera
 - `js/lib/three.min.js`: three.js r149 (MIT licence, see `js/lib/THREE-LICENSE`)
